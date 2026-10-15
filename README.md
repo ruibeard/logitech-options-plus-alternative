@@ -1,6 +1,6 @@
 # MX Mouse
 
-A tiny macOS app for your MX Master 3 or Logitech M705.
+A lightweight macOS alternative to Logitech Logi Options+ for MX Master 3 for Mac and Logitech M705.
 
 |        |   MX Mouse | MX Mouse UI | Logi Options+ |
 |--------|-----------:|------------:|--------------:|
@@ -12,12 +12,12 @@ Close the window. Only the 4.3 MB stays.
 
 ## Supported mice
 
-| Mouse | Connection |
-| --- | --- |
-| MX Master 3 for Mac | Bluetooth |
-| **Logitech M705 — new in v0.1.1** | **Logitech Unifying USB receiver** |
+| Mouse | Connection | Notes |
+| --- | --- | --- |
+| MX Master 3 for Mac | Bluetooth | Apple Silicon, macOS 13+. |
+| **Logitech M705 — new in v0.1.1** | **Logitech Unifying USB receiver** | Apple Silicon, macOS 13+. Tested: paired ID `101b`, receiver `c52b`, older thumb-button variant. Wheel tilt stays native; no DPI or SmartShift. Bolt and other receiver models unsupported. |
 
-Apple Silicon, macOS 13+. Tested M705: paired ID `101b` through Unifying `c52b`, with the older thumb button. Wheel tilt stays native; DPI and SmartShift are unavailable on M705. Bolt and other receiver models are not supported.
+## Features
 
 - [x] Custom buttons and shortcuts
 - [x] Scroll, DPI, SmartShift
@@ -29,7 +29,7 @@ Apple Silicon, macOS 13+. Tested M705: paired ID `101b` through Unifying `c52b`,
 
 ## Install
 
-1. [Download](https://github.com/ruibeard/logitechdriver/releases), drag to Applications.
+1. [Download](https://github.com/ruibeard/logitech-options-plus-alternative/releases), drag to Applications.
 2. macOS gets nervous → **Open Anyway**.
 3. Quit Logi Options+.
 4. **Set Up…** → grant permissions.
