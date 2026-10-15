@@ -1,6 +1,6 @@
 # MX Mouse
 
-A tiny macOS app for your MX Master 3.
+A tiny macOS app for your MX Master 3 or Logitech M705.
 
 |        |   MX Mouse | MX Mouse UI | Logi Options+ |
 |--------|-----------:|------------:|--------------:|
@@ -10,12 +10,20 @@ Close the window. Only the 4.3 MB stays.
 
 ![MX Mouse Settings](docs/images/settings.png)
 
-**Works with:** MX Master 3 for Mac, Bluetooth, Apple Silicon, macOS 13+. Other mice: not yet.
+## Supported mice
+
+| Mouse | Connection |
+| --- | --- |
+| MX Master 3 for Mac | Bluetooth |
+| **Logitech M705 — new in v0.1.1** | **Logitech Unifying USB receiver** |
+
+Apple Silicon, macOS 13+. Tested M705: paired ID `101b` through Unifying `c52b`, with the older thumb button. Wheel tilt stays native; DPI and SmartShift are unavailable on M705. Bolt and other receiver models are not supported.
 
 - [x] Custom buttons and shortcuts
 - [x] Scroll, DPI, SmartShift
 - [x] Import from Options+ (read-only)
 - [x] Quit or uninstall Options+ from the app
+- [x] Battery indicator when reported (percentage or coarse level)
 - [x] Start at login
 - [x] No account, no cloud
 

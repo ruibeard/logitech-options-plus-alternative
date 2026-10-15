@@ -96,6 +96,13 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
 @property BOOL selected;
 @end
 @implementation MXCallout
+- (instancetype)initWithFrame:(NSRect)frame {
+    self=[super initWithFrame:frame];
+    if(self) self.focusRingType=NSFocusRingTypeNone;
+    return self;
+}
+- (BOOL)becomeFirstResponder { BOOL result=[super becomeFirstResponder]; self.needsDisplay=YES; return result; }
+- (BOOL)resignFirstResponder { BOOL result=[super resignFirstResponder]; self.needsDisplay=YES; return result; }
 - (BOOL)isFlipped { return YES; }
 - (void)drawRect:(NSRect)rect {
     (void)rect;
@@ -104,7 +111,8 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
     [NSGraphicsContext saveGraphicsState];
     NSShadow *shadow=[NSShadow new]; shadow.shadowColor=[NSColor colorWithCalibratedWhite:0 alpha:self.selected ? 0.14 : 0.09];
     shadow.shadowBlurRadius=10; shadow.shadowOffset=NSMakeSize(0,-3); [shadow set];
-    [NSColor.controlBackgroundColor setFill]; [shape fill];
+    BOOL active=self.selected || self.highlighted;
+    [(active ? NSColor.selectedContentBackgroundColor : NSColor.controlBackgroundColor) setFill]; [shape fill];
     [NSGraphicsContext restoreGraphicsState];
     [[NSColor.separatorColor colorWithAlphaComponent:0.15] setStroke]; shape.lineWidth=0.5; [shape stroke];
     NSArray *parts=[self.title componentsSeparatedByString:@"\n"];
@@ -112,7 +120,7 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
     for(NSUInteger i=0;i<parts.count;++i) {
         [parts[i] drawAtPoint:NSMakePoint(card.origin.x+13,y) withAttributes:@{
             NSFontAttributeName:[NSFont systemFontOfSize:i==0 ? 13.5 : 12 weight:i==0 ? NSFontWeightSemibold : NSFontWeightRegular],
-            NSForegroundColorAttributeName:NSColor.labelColor}];
+            NSForegroundColorAttributeName:active ? NSColor.alternateSelectedControlTextColor : NSColor.labelColor}];
         y+=i==0 ? 20 : 17;
     }
 }
@@ -121,6 +129,7 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
 @interface MXDiagram : NSView
 @property NSArray<NSValue *> *anchors;
 @property NSArray<NSValue *> *ends;
+@property BOOL compactMouse;
 @end
 @implementation MXDiagram
 - (NSView *)hitTest:(NSPoint)point { (void)point; return nil; }
@@ -128,7 +137,12 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
     (void)rect;
     NSColor *ink = [NSColor.secondaryLabelColor colorWithAlphaComponent:0.48];
     for (NSUInteger i = 0; i < self.anchors.count; ++i) {
+        if (self.compactMouse && i >= 4) continue;
         NSPoint point = self.anchors[i].pointValue, start = self.ends[i].pointValue;
+        if(self.compactMouse) {
+            NSPoint compactAnchors[]={NSMakePoint(338,337),NSMakePoint(289,253),NSMakePoint(266,286),NSMakePoint(275,183)};
+            point=compactAnchors[i];
+        }
         NSBezierPath *line = [NSBezierPath bezierPath];
         [line moveToPoint:start];
         [line lineToPoint:point];
@@ -142,6 +156,14 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
 
 @interface SettingsDelegate : NSObject <NSApplicationDelegate>
 @property NSWindow *window;
+@property NSTextField *deviceTitle;
+@property NSTextField *deviceSubtitle;
+@property NSTextField *batteryLabel;
+@property NSImageView *batteryIcon;
+@property MXMouseView *mouseView;
+@property MXDiagram *diagramLines;
+@property NSMutableArray<NSView *> *masterOnlyViews;
+@property BOOL compactMouse;
 @property NSTextField *statusLabel;
 @property NSMutableArray<NSPopUpButton *> *modes;
 @property NSMutableArray<MXRecorder *> *recorders;
@@ -223,8 +245,16 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
         return [NSColor colorWithCalibratedWhite:dark ? 0.12 : 0.975 alpha:1];
     }];
     NSTextField *title = [self label:@"MX Master 3" size:27 weight:NSFontWeightSemibold];
+    self.deviceTitle=title;
     title.frame = NSMakeRect(32, 676, 400, 36); [root addSubview:title];
     NSTextField *subtitle = [self label:@"FOR MAC  /  BLUETOOTH" size:11 weight:NSFontWeightMedium];
+    self.deviceSubtitle=subtitle;
+    self.batteryIcon=[[NSImageView alloc] initWithFrame:NSMakeRect(454,684,24,16)];
+    self.batteryIcon.hidden=YES; [root addSubview:self.batteryIcon];
+    self.batteryLabel=[self label:@"" size:12 weight:NSFontWeightRegular];
+    self.batteryLabel.frame=NSMakeRect(484,679,145,24);
+    self.batteryLabel.hidden=YES; [root addSubview:self.batteryLabel];
+    self.masterOnlyViews=[NSMutableArray new];
     subtitle.textColor = NSColor.secondaryLabelColor; subtitle.frame = NSMakeRect(34, 654, 400, 18); [root addSubview:subtitle];
     self.importOptionsButton=[self button:@"Import from Options+…" action:@selector(importOptions:)];
     self.importOptionsButton.frame=NSMakeRect(30,610,211,32); [root addSubview:self.importOptionsButton];
@@ -234,8 +264,8 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
     self.uninstallOptionsButton=[self button:@"Uninstall Options+…" action:@selector(uninstallOptions:)];
     self.uninstallOptionsButton.frame=NSMakeRect(786,677,184,32); [root addSubview:self.uninstallOptionsButton];
     NSView *diagram = [[NSView alloc] initWithFrame:NSMakeRect(26, 168, 660, 440)]; [root addSubview:diagram];
-    MXMouseView *mouse = [[MXMouseView alloc] initWithFrame:NSMakeRect(205, 10, 270, 430)]; [diagram addSubview:mouse];
-    MXDiagram *arrows=[[MXDiagram alloc] initWithFrame:diagram.bounds]; [diagram addSubview:arrows];
+    MXMouseView *mouse = [[MXMouseView alloc] initWithFrame:NSMakeRect(205, 10, 270, 430)]; [diagram addSubview:mouse]; self.mouseView=mouse;
+    MXDiagram *arrows=[[MXDiagram alloc] initWithFrame:diagram.bounds]; [diagram addSubview:arrows]; self.diagramLines=arrows;
     self.callouts = [NSMutableArray new];
     NSArray *names = @[@"Middle button", @"Back", @"Forward", @"Thumb button", @"Top button"];
     NSArray<NSValue *> *frames = @[[NSValue valueWithRect:NSMakeRect(432,340,177,72)], [NSValue valueWithRect:NSMakeRect(270,75,174,72)], [NSValue valueWithRect:NSMakeRect(94,235,176,72)], [NSValue valueWithRect:NSMakeRect(0,145,211,90)], [NSValue valueWithRect:NSMakeRect(452,250,185,90)]];
@@ -251,7 +281,7 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
         [mode addItemsWithTitles:@[@"Mouse default", @"Keyboard shortcut", @"Do nothing"]]; mode.tag=(NSInteger)i; mode.target=self; mode.action=@selector(modeChanged:); [pane addSubview:mode]; [self.modes addObject:mode];
         MXRecorder *recorder=[MXRecorder new]; recorder.frame=NSMakeRect(0,4,232,36); recorder.didChange=^{ [layoutSelf updateCallouts]; [layoutSelf settingsChanged:nil]; }; [pane addSubview:recorder]; [self.recorders addObject:recorder];
     }
-    MXCallout *thumbWheel=[[MXCallout alloc] initWithFrame:NSMakeRect(405,173,206,72)]; thumbWheel.title=@"Horizontal scroll\nThumb wheel"; thumbWheel.bordered=NO; thumbWheel.target=self; thumbWheel.action=@selector(showScroll:); [diagram addSubview:thumbWheel]; [self.callouts addObject:thumbWheel];
+    MXCallout *thumbWheel=[[MXCallout alloc] initWithFrame:NSMakeRect(405,173,206,72)]; thumbWheel.title=@"Horizontal scroll\nThumb wheel"; thumbWheel.bordered=NO; thumbWheel.target=self; thumbWheel.action=@selector(showScroll:); [diagram addSubview:thumbWheel]; [self.callouts addObject:thumbWheel]; [self.masterOnlyViews addObject:thumbWheel];
     /* Logitech core_metadata.json marker percentages, mapped into the image frame. */
     arrows.anchors=@[[NSValue valueWithPoint:NSMakePoint(396.1,375.5)], [NSValue valueWithPoint:NSMakePoint(326.65,182)], [NSValue valueWithPoint:NSMakePoint(299.14,255.1)], [NSValue valueWithPoint:NSMakePoint(227.84,190.6)], [NSValue valueWithPoint:NSMakePoint(422.39,293.8)], [NSValue valueWithPoint:NSMakePoint(353.36,218.55)]];
     arrows.ends=@[[NSValue valueWithPoint:NSMakePoint(438,376)], [NSValue valueWithPoint:NSMakePoint(338,141)], [NSValue valueWithPoint:NSMakePoint(256,264)], [NSValue valueWithPoint:NSMakePoint(205,190)], [NSValue valueWithPoint:NSMakePoint(458,294)], [NSValue valueWithPoint:NSMakePoint(411,209)]];
@@ -260,7 +290,7 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
     self.wheelMode=[[NSPopUpButton alloc] initWithFrame:NSMakeRect(0,208,235,28) pullsDown:NO]; [self.wheelMode addItemsWithTitles:@[@"Leave unchanged", @"Ratchet", @"Free spin", @"SmartShift"]]; [scrollEditor addSubview:self.wheelMode];
     NSArray *sectionNames=@[@"Wheel mode", @"Main wheel speed", @"Thumb wheel speed", @"Pointer speed"];
     CGFloat sectionY[]={235,180,111,40};
-    for(NSUInteger i=0;i<4;++i) { NSTextField *l=[self label:sectionNames[i] size:12 weight:NSFontWeightSemibold]; l.frame=NSMakeRect(0,sectionY[i],235,19); [scrollEditor addSubview:l]; }
+    for(NSUInteger i=0;i<4;++i) { NSTextField *l=[self label:sectionNames[i] size:12 weight:NSFontWeightSemibold]; l.frame=NSMakeRect(0,sectionY[i],235,19); [scrollEditor addSubview:l]; if(i!=1) [self.masterOnlyViews addObject:l]; }
     self.verticalSpeed=[NSSlider sliderWithValue:100 minValue:10 maxValue:300 target:self action:@selector(speedChanged:)]; self.verticalSpeed.frame=NSMakeRect(0,157,177,22); [scrollEditor addSubview:self.verticalSpeed];
     self.horizontalSpeed=[NSSlider sliderWithValue:100 minValue:10 maxValue:300 target:self action:@selector(speedChanged:)]; self.horizontalSpeed.frame=NSMakeRect(0,88,177,22); [scrollEditor addSubview:self.horizontalSpeed];
     self.verticalValue=[self label:@"100%" size:12 weight:NSFontWeightRegular]; self.verticalValue.frame=NSMakeRect(184,157,54,22); [scrollEditor addSubview:self.verticalValue];
@@ -269,6 +299,7 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
     self.invertHorizontal=[NSButton checkboxWithTitle:@"Reverse direction" target:nil action:nil]; self.invertHorizontal.frame=NSMakeRect(0,66,235,22); [scrollEditor addSubview:self.invertHorizontal];
     self.smooth=[NSButton checkboxWithTitle:@"Smooth scroll" target:nil action:nil]; self.smooth.frame=NSMakeRect(110,135,130,22); [scrollEditor addSubview:self.smooth];
     self.dpi=[[NSPopUpButton alloc] initWithFrame:NSMakeRect(0,10,235,28) pullsDown:NO]; [self.dpi addItemsWithTitles:@[@"Leave unchanged", @"400 DPI", @"800 DPI", @"1000 DPI", @"1600 DPI", @"2000 DPI", @"3200 DPI", @"4000 DPI"]]; [scrollEditor addSubview:self.dpi];
+    [self.masterOnlyViews addObjectsFromArray:@[self.wheelMode,self.horizontalSpeed,self.horizontalValue,self.invertHorizontal,self.dpi]];
     NSBox *footerLine=[[NSBox alloc] initWithFrame:NSMakeRect(32,155,936,1)]; footerLine.boxType=NSBoxSeparator; [root addSubview:footerLine];
     self.statusLabel=[NSTextField wrappingLabelWithString:@"Helper stopped."]; self.statusLabel.font=[NSFont systemFontOfSize:12]; self.statusLabel.frame=NSMakeRect(34,110,710,34); [root addSubview:self.statusLabel];
     self.loginService=[SMAppService loginItemServiceWithIdentifier:@"local.mxmouse.helper"];
@@ -330,6 +361,24 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
         for (MXRecorder *recorder in weakSelf.recorders) if ([recorder capture:event]) return nil;
         return event;
     }];
+}
+- (void)updateDevice:(NSDictionary *)status {
+    NSString *name=[status[@"deviceName"] isKindOfClass:NSString.class] ? status[@"deviceName"] : @"";
+    BOOL compact=[name isEqualToString:@"Logitech M705"];
+    self.deviceTitle.stringValue=compact ? name : @"MX Master 3";
+    self.deviceSubtitle.stringValue=compact ? @"UNIFYING RECEIVER" : @"FOR MAC  /  BLUETOOTH";
+    if(self.compactMouse==compact) return;
+    self.compactMouse=compact;
+    [self cancelRecording];
+    self.mouseView.frame=compact ? NSMakeRect(155,50,400,350) : NSMakeRect(205,10,270,430);
+    self.mouseView.compactMouse=compact;
+    self.mouseView.needsDisplay=YES;
+    self.diagramLines.compactMouse=compact;
+    self.diagramLines.needsDisplay=YES;
+    for(NSView *view in self.masterOnlyViews) view.hidden=compact;
+    self.callouts[4].hidden=compact;
+    if(compact && self.selectedButton==4) self.selectedButton=3;
+    [self updateCallouts];
 }
 - (void)updateCallouts {
     NSArray *names=@[@"Middle button", @"Back", @"Forward", @"Thumb button", @"Top button"];
@@ -445,19 +494,22 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
         [self alert:@"Finish recording the shortcut first, or press Escape to cancel."]; return NO;
     }
     NSMutableDictionary *root = [readDictionary(supportPath(@"settings.plist")) mutableCopy];
-    NSMutableDictionary *buttons = [NSMutableDictionary new];
+    NSMutableDictionary *buttons = [root[@"buttons"] isKindOfClass:NSDictionary.class] ? [root[@"buttons"] mutableCopy] : [NSMutableDictionary new];
     for (NSUInteger i = 0; i < MX_BUTTON_COUNT; ++i) {
+        if(self.compactMouse && i==4) continue;
         buttons[@(mx_button_keys[i])] = @{@"mode":@(self.modes[i].indexOfSelectedItem),
             @"keyCode":@(self.recorders[i].keyCode), @"modifiers":@(self.recorders[i].shortcutModifiers)};
     }
     root[@"buttons"] = buttons;
-    root[@"wheelMode"] = @(self.wheelMode.indexOfSelectedItem);
-    root[@"smartShift"] = @(self.smartShiftThreshold);
-    root[@"dpi"] = self.dpi.indexOfSelectedItem == 0 ? @0 : @(self.dpi.titleOfSelectedItem.intValue);
+    if(!self.compactMouse) {
+        root[@"wheelMode"] = @(self.wheelMode.indexOfSelectedItem);
+        root[@"smartShift"] = @(self.smartShiftThreshold);
+        root[@"dpi"] = self.dpi.indexOfSelectedItem == 0 ? @0 : @(self.dpi.titleOfSelectedItem.intValue);
+    }
     root[@"verticalSpeed"] = @(self.verticalSpeed.integerValue);
-    root[@"horizontalSpeed"] = @(self.horizontalSpeed.integerValue);
+    if(!self.compactMouse) root[@"horizontalSpeed"] = @(self.horizontalSpeed.integerValue);
     root[@"invertVertical"] = self.invertVertical.state == NSControlStateValueOn ? @YES : @NO;
-    root[@"invertHorizontal"] = self.invertHorizontal.state == NSControlStateValueOn ? @YES : @NO;
+    if(!self.compactMouse) root[@"invertHorizontal"] = self.invertHorizontal.state == NSControlStateValueOn ? @YES : @NO;
     root[@"smooth"] = self.smooth.state == NSControlStateValueOn ? @YES : @NO;
     NSString *path = supportPath(@"settings.plist");
     if (!path || !mx_write_plist(path.fileSystemRepresentation, (__bridge CFDictionaryRef)root)) {
@@ -638,6 +690,23 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
     BOOL running = [self helperRunning];
     if (running) [self post:@"local.mxmouse.status"];
     NSDictionary *status = readDictionary(supportPath(@"status.plist"));
+    NSNumber *battery=[status[@"batteryPercent"] isKindOfClass:NSNumber.class] ? status[@"batteryPercent"] : nil;
+    NSString *batteryState=[status[@"batteryStatus"] isKindOfClass:NSString.class] ? status[@"batteryStatus"] : @"";
+    BOOL knownBattery=running && [status[@"connected"] boolValue] &&
+        ((battery && battery.integerValue>=0 && battery.integerValue<=100) || batteryState.length);
+    self.batteryLabel.hidden=self.batteryIcon.hidden=!knownBattery;
+    if (knownBattery) {
+        self.batteryLabel.stringValue=battery ? [NSString stringWithFormat:@"%ld%%%@",battery.integerValue,[status[@"batteryCharging"] boolValue] ? @" · Charging" : @""] : batteryState;
+        NSString *symbol=[status[@"batteryCharging"] boolValue] ? @"battery.100percent.bolt" :
+            !battery ? @"battery.50percent" : battery.integerValue<=10 ? @"battery.0percent" :
+            battery.integerValue<=35 ? @"battery.25percent" : battery.integerValue<=65 ? @"battery.50percent" :
+            battery.integerValue<=85 ? @"battery.75percent" : @"battery.100percent";
+        self.batteryIcon.image=[NSImage imageWithSystemSymbolName:symbol accessibilityDescription:@"Mouse battery"];
+        self.batteryIcon.contentTintColor=battery && battery.integerValue<=10 ? NSColor.systemRedColor : NSColor.secondaryLabelColor;
+        self.batteryLabel.toolTip=@"Battery level reported by the connected mouse.";
+    }
+
+    [self updateDevice:status];
     NSString *state = [status[@"state"] isKindOfClass:NSString.class] ? status[@"state"] : @"";
     NSString *detail = [status[@"detail"] isKindOfClass:NSString.class] ? status[@"detail"] : @"";
     NSString *failure=nil;

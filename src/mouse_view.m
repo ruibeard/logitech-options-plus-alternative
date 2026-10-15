@@ -15,12 +15,15 @@ static NSBezierPath *MXRound(CGFloat x, CGFloat y, CGFloat width, CGFloat height
 
 @interface MXMouseView ()
 @property (strong) NSImage *mouseImage;
+@property (strong) NSImage *compactImage;
 @end
 
 @implementation MXMouseView
 - (instancetype)initWithFrame:(NSRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
+        NSString *compactPath=[NSBundle.mainBundle pathForResource:@"m705" ofType:@"png"];
+        if(compactPath) self.compactImage=[[NSImage alloc] initWithContentsOfFile:compactPath];
         NSString *path = [NSBundle.mainBundle pathForResource:@"mx-master-3" ofType:@"png"];
         if (path) {
             self.mouseImage = [[NSImage alloc] initWithContentsOfFile:path];
@@ -33,6 +36,42 @@ static NSBezierPath *MXRound(CGFloat x, CGFloat y, CGFloat width, CGFloat height
 - (BOOL)isOpaque { return NO; }
 - (void)drawRect:(NSRect)dirtyRect {
     (void)dirtyRect;
+    if (self.compactMouse && self.compactImage) {
+        NSSize source=self.compactImage.size;
+        CGFloat scale=MIN(self.bounds.size.width/source.width,self.bounds.size.height/source.height);
+        NSRect target=NSMakeRect((self.bounds.size.width-source.width*scale)/2,
+            (self.bounds.size.height-source.height*scale)/2,source.width*scale,source.height*scale);
+        [self.compactImage drawInRect:target fromRect:NSZeroRect operation:NSCompositingOperationSourceOver
+            fraction:1 respectFlipped:YES hints:@{NSImageHintInterpolation:@(NSImageInterpolationHigh)}];
+        return;
+    }
+    if (self.compactMouse) {
+        [NSGraphicsContext saveGraphicsState];
+        CGFloat scale=MIN(self.bounds.size.width/270, self.bounds.size.height/430);
+        NSAffineTransform *fit=[NSAffineTransform transform];
+        [fit translateXBy:(self.bounds.size.width-270*scale)/2 yBy:(self.bounds.size.height-430*scale)/2];
+        [fit scaleBy:scale]; [fit concat];
+        // Original compact ergonomic silhouette, independent of bundled artwork.
+        NSBezierPath *body=[NSBezierPath bezierPath];
+        [body moveToPoint:NSMakePoint(140,45)];
+        [body curveToPoint:NSMakePoint(231,170) controlPoint1:NSMakePoint(200,45) controlPoint2:NSMakePoint(231,99)];
+        [body curveToPoint:NSMakePoint(201,365) controlPoint1:NSMakePoint(240,251) controlPoint2:NSMakePoint(238,335)];
+        [body curveToPoint:NSMakePoint(63,349) controlPoint1:NSMakePoint(166,400) controlPoint2:NSMakePoint(85,393)];
+        [body curveToPoint:NSMakePoint(52,210) controlPoint1:NSMakePoint(32,311) controlPoint2:NSMakePoint(39,251)];
+        [body curveToPoint:NSMakePoint(140,45) controlPoint1:NSMakePoint(62,112) controlPoint2:NSMakePoint(88,45)];
+        [body closePath]; MXFill(body,0.36,0.12,0);
+        [MXGray(0.09) setStroke]; body.lineWidth=2; [body stroke];
+        NSBezierPath *seam=[NSBezierPath bezierPath];
+        [seam moveToPoint:NSMakePoint(141,49)]; [seam lineToPoint:NSMakePoint(141,189)];
+        [seam moveToPoint:NSMakePoint(62,185)]; [seam curveToPoint:NSMakePoint(230,185) controlPoint1:NSMakePoint(120,211) controlPoint2:NSMakePoint(182,210)];
+        seam.lineWidth=2; [seam stroke];
+        MXFill(MXRound(128,91,27,65,11),0.77,0.35,0);
+        MXFill(MXRound(54,212,17,35,6),0.45,0.22,0);
+        MXFill(MXRound(47,255,17,35,6),0.42,0.18,0);
+        MXFill(MXRound(46,305,30,30,10),0.3,0.14,0);
+        [NSGraphicsContext restoreGraphicsState];
+        return;
+    }
     if (self.mouseImage) {
         // Preserve the original PNG's proportions and transparent silhouette.
         NSRect source = NSMakeRect(0, 0, 636, 1024);

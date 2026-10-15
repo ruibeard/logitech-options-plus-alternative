@@ -64,6 +64,24 @@ int main(void) {
     assert(!mx_load_config(&config, error, sizeof(error)));
     assert(error[0]);
     unlink(path);
+    mx_set_battery(-1,"Good",0);
+    mx_write_status("running","Connected",true);
+    assert(mx_path(path,"status.plist"));
+    CFDictionaryRef status=(CFDictionaryRef)mx_read_plist(path);
+    assert(status && CFEqual(CFDictionaryGetValue(status,CFSTR("batteryStatus")),CFSTR("Good")));
+    assert(!CFDictionaryContainsKey(status,CFSTR("batteryPercent")));
+    CFRelease(status);
+    mx_set_battery(75,NULL,1);
+    mx_write_status("running","Connected",true);
+    status=(CFDictionaryRef)mx_read_plist(path);
+    assert(CFDictionaryContainsKey(status,CFSTR("batteryPercent")));
+    assert(CFDictionaryGetValue(status,CFSTR("batteryCharging"))==kCFBooleanTrue);
+    CFRelease(status);
+    mx_write_status("stopped","Disconnected",false);
+    status=(CFDictionaryRef)mx_read_plist(path);
+    assert(!CFDictionaryContainsKey(status,CFSTR("batteryPercent")));
+    assert(!CFDictionaryContainsKey(status,CFSTR("batteryCharging")));
+    CFRelease(status);
     puts("Atomic settings storage, defaults, malformed input, and binding validation tests passed.");
     return 0;
 }

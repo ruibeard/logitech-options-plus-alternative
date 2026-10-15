@@ -67,8 +67,8 @@ def info(bundle, identifier, executable, background=False):
         "CFBundleExecutable": executable,
         "CFBundlePackageType": "APPL",
         "CFBundleIconFile": "MXMouseHelper" if background else "MXMouse",
-        "CFBundleShortVersionString": "0.1.0",
-        "CFBundleVersion": "1",
+        "CFBundleShortVersionString": "0.1.1",
+        "CFBundleVersion": "2",
         "LSMinimumSystemVersion": "13.0",
         "NSHighResolutionCapable": True,
     }
@@ -104,6 +104,7 @@ def main():
     resources = APP / "Contents/Resources"
     resources.mkdir(exist_ok=True)
     shutil.copyfile(ROOT / "assets/mx-master-3.png", resources / "mx-master-3.png")
+    shutil.copyfile(ROOT / "assets/m705.png", resources / "m705.png")
     run("iconutil", "-c", "icns", BUILD / "MXMouse.iconset", "-o", resources / "MXMouse.icns")
     helper_resources = HELPER / "Contents/Resources"
     helper_resources.mkdir(exist_ok=True)

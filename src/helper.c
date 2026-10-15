@@ -30,8 +30,12 @@ static struct {
     MXConfig config;
     uint8_t input[MX_REPORT_MAX], response[MX_REPORT_MAX];
     size_t output_sizes[256], response_length;
-    uint8_t request_feature, request_tag, software_id;
+    uint8_t request_feature, request_tag, request_address, address, software_id;
+    bool receiver;
     uint8_t controls, wheel, thumbwheel, dpi, smartshift, enhanced_shift;
+    uint8_t battery;
+    bool battery_unified, battery_percent_supported, battery_requested;
+    CFAbsoluteTime battery_checked_at;
     uint8_t old_wheel, old_thumb[2], multiplier;
     uint16_t thumb_native, thumb_diverted;
     bool old_wheel_valid, old_thumb_valid;
@@ -55,21 +59,22 @@ static void schedule_work(void) {
 
 static void status(const char *state, const char *message) {
     fprintf(stderr, "%s: %s\n", state, message);
+    mx_set_device_name(app.definition ? app.definition->name : NULL);
     mx_write_status(state, message, app.connected);
 }
 
-static bool call(uint8_t feature, uint8_t function, const uint8_t *parameters, size_t length) {
+static bool exchange(uint8_t address, uint8_t feature, uint8_t tag, const uint8_t *parameters, size_t length) {
     if (!app.device || !app.online || app.waiting || length > 16) return false;
     uint8_t report_id = length <= 3 && app.output_sizes[0x10] == 6 ? 0x10 : 0x11;
     if (report_id == 0x11 && app.output_sizes[0x11] != 19) return false;
     size_t total = app.output_sizes[report_id] + 1;
     if (total < 4 + length || total > MX_REPORT_MAX) return false;
     uint8_t report[MX_REPORT_MAX] = {0};
-    app.software_id = app.software_id % 15 + 1;
     app.request_feature = feature;
-    app.request_tag = (uint8_t)((function << 4) | app.software_id);
+    app.request_tag = tag;
+    app.request_address = address;
     report[0] = report_id;
-    report[1] = 0xff;
+    report[1] = address;
     report[2] = feature;
     report[3] = app.request_tag;
     if (length) memcpy(report + 4, parameters, length);
@@ -88,6 +93,28 @@ static bool call(uint8_t feature, uint8_t function, const uint8_t *parameters, s
         CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.02, true);
     app.waiting = false;
     return app.received && !app.request_failed;
+}
+
+static bool call(uint8_t feature, uint8_t function, const uint8_t *parameters, size_t length) {
+    app.software_id = app.software_id % 15 + 1;
+    return exchange(app.address, feature, (uint8_t)((function << 4) | app.software_id), parameters, length);
+}
+
+static bool select_receiver_mouse(void) {
+    for (uint8_t slot=1; slot<=6 && app.online && !app.stop; ++slot) {
+        uint8_t sub=(uint8_t)(0x20+slot-1);
+        if (!exchange(0xff,0x83,0xb5,&sub,1)) continue;
+        const MXDeviceDefinition *definition=mx_receiver_mouse(slot,app.response,app.response_length);
+        if (!definition) continue;
+        app.address=slot;
+        uint8_t ping[]={0,0,0xa7};
+        if (call(0,1,ping,3) && app.response_length>=7 && app.response[6]==0xa7 && app.response[4]>=2) {
+            app.definition=definition;
+            fprintf(stderr,"Receiver slot %u: %s (%04x)\n",slot,definition->name,(unsigned)definition->product_id);
+            return true;
+        }
+    }
+    return false;
 }
 
 static uint8_t feature(uint16_t id) {
@@ -173,13 +200,22 @@ static void notification(const uint8_t *packet, size_t length) {
     }
 }
 
+static void clear_scroll(void);
+
 static void input_report(void *context, IOReturn result, void *sender, IOHIDReportType type,
                          uint32_t id, uint8_t *report, CFIndex size) {
     (void)context; (void)sender; (void)type;
     if (result != kIOReturnSuccess || size <= 0 || !app.online) return;
     uint8_t packet[MX_REPORT_MAX];
     size_t length = mx_normalize_report(id, report, (size_t)size, packet);
-    if (length < 4 || packet[1] != 0xff) return;
+    if (length < 4) return;
+    if (app.receiver && packet[1]==app.address && packet[2]==0x41) {
+        app.connected=false;
+        clear_scroll();
+        if (length>=5 && !(packet[4]&0x40)) app.initialisation_attempted=false;
+        schedule_work(); return;
+    }
+    if (packet[1] != (app.waiting ? app.request_address : app.address)) return;
     if (app.waiting && packet[2] == app.request_feature && packet[3] == app.request_tag) {
         memcpy(app.response, packet, length);
         app.response_length = length; app.received = true;
@@ -206,9 +242,84 @@ static void clear_scroll(void) {
     memset(app.fraction, 0, sizeof(app.fraction));
 }
 
+/* Pairing may change while the USB receiver itself remains connected. */
+static bool receiver_identity_matches(void) {
+    if (!app.receiver) return true;
+    if (!app.definition || app.address<1 || app.address>6) return false;
+    uint8_t sub=(uint8_t)(0x20+app.address-1);
+    return exchange(0xff,0x83,0xb5,&sub,1) &&
+        mx_receiver_mouse(app.address, app.response, app.response_length)==app.definition;
+}
+
+static void read_battery(bool force) {
+    if (!app.connected || !app.battery || app.waiting ||
+        (!force && CFAbsoluteTimeGetCurrent() - app.battery_checked_at < 60)) return;
+    app.battery_checked_at = CFAbsoluteTimeGetCurrent();
+    mx_set_battery(-1, NULL, -1);
+    if (!receiver_identity_matches() ||
+        !call(app.battery, app.battery_unified ? 1 : 0, NULL, 0) ||
+        app.response_length < (app.battery_unified ? 8u : 7u)) return;
+    unsigned percent = app.response[4], code = app.response[6];
+    const char *level = NULL;
+    if (app.battery_unified) {
+        switch (app.response[5]) {
+            case 1: level = "Critical"; break;
+            case 2: level = "Low"; break;
+            case 4: level = "Good"; break;
+            case 8: level = "Full"; break;
+        }
+    } else if (percent > 0 && percent <= 100) {
+        /* Coarse 0x1000 devices report thresholds, not a measured percentage. */
+        level = percent < 11 ? "Critical" : percent < 30 ? "Low" : percent < 81 ? "Good" : "Full";
+    }
+    const char *state = level;
+    int charging = -1;
+    switch (code) {
+        case 0: charging = 0; break;
+        case 1: case 2: state = "Charging"; charging = 1; break;
+        case 3: state = "Full"; charging = 0; break;
+        case 4: state = "Charging slowly"; charging = 1; break;
+        case 5: state = "Invalid battery"; break;
+        case 6: state = "Battery temperature error"; break;
+        case 7: state = "Charging error"; break;
+    }
+    /* 0 means unknown in 0x1000; unified state-of-charge can explicitly report 0%. */
+    int reported = app.battery_percent_supported && percent <= 100 &&
+        (app.battery_unified || percent > 0) ? (int)percent : -1;
+    mx_set_battery(reported, state, charging);
+    if (app.probe) fprintf(stderr, "Battery: percent=%d status=%s\n", reported, state ? state : "unknown");
+}
+
+static void discover_battery(void) {
+    app.battery = feature(0x1000);
+    app.battery_unified = false;
+    app.battery_percent_supported = false;
+    app.battery_checked_at = 0;
+    mx_set_battery(-1, NULL, -1);
+    if (app.battery) {
+        /* Capability: level count and flags; mileage bit distinguishes percentage. */
+        if (call(app.battery, 1, NULL, 0) && app.response_length >= 6)
+            app.battery_percent_supported = app.response[4] >= 10 && (app.response[5] & 2);
+    } else {
+        app.battery = feature(0x1004);
+        app.battery_unified = app.battery != 0;
+        if (app.battery && call(app.battery, 0, NULL, 0) && app.response_length >= 6)
+            app.battery_percent_supported = (app.response[5] & 2) != 0;
+    }
+    read_battery(true);
+}
+
+static void publish_status_snapshot(void);
+
 static bool restore(void) {
     clear_scroll();
     bool restored = true;
+    if (app.receiver && !app.probe && !receiver_identity_matches()) {
+        app.connected=false;
+        memset(app.diverted,0,sizeof(app.diverted));
+        app.wheel_changed=app.thumb_changed=false;
+        return true; /* Never send cleanup writes to a replacement/unknown pairing. */
+    }
     if (app.online && !app.probe) {
         for (size_t i = 0; i < MX_BUTTON_COUNT; ++i) if (app.diverted[i]) {
             if (divert(i, false)) app.diverted[i] = false;
@@ -234,6 +345,9 @@ static void close_device(void) {
     app.configuring = true;
     if (!restore()) app.restoration_failed = true;
     app.connected = false;
+    app.battery = 0;
+    app.battery_checked_at = 0;
+    mx_set_battery(-1, NULL, -1);
     if (app.device) {
         IOHIDDeviceRegisterInputReportCallback(app.device, app.input, sizeof(app.input), NULL, NULL);
         IOHIDDeviceUnscheduleFromRunLoop(app.device, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
@@ -252,13 +366,17 @@ static bool configure(void) {
         status("error", "Could not restore native reporting. Restart the mouse before continuing.");
         return false;
     }
+    if (app.receiver && !app.connected) {
+        status("waiting","Receiver pairing changed; waiting for a supported mouse.");
+        return false;
+    }
     bool okay = true;
     if (!CGPreflightPostEventAccess()) {
         status("permission", "macOS is denying input-event posting to MX Mouse Helper. Request Access in Settings; if already enabled, re-add the current helper.");
         return false;
     }
     for (size_t i = 0; i < MX_BUTTON_COUNT; ++i) {
-        if (app.config.buttons[i].action == MX_NATIVE) continue;
+        if (!app.definition->button_controls[i] || app.config.buttons[i].action == MX_NATIVE) continue;
         if (!app.controls || !app.divertible[i]) { okay = false; continue; }
         /* Mark before the request: a lost reply must still trigger restoration. */
         app.diverted[i] = true;
@@ -274,7 +392,7 @@ static bool configure(void) {
             if (!call(app.wheel, 2, &mode, 1)) okay = false;
         }
     }
-    if (horizontal) {
+    if (horizontal && app.thumbwheel) {
         if (!app.thumbwheel || !app.old_thumb_valid || !app.thumb_native || !app.thumb_diverted) okay = false;
         else {
             uint8_t parameters[] = {1, 0};
@@ -282,7 +400,7 @@ static bool configure(void) {
             if (!call(app.thumbwheel, 2, parameters, 2)) okay = false;
         }
     }
-    if (app.config.dpi) {
+    if (app.config.dpi && app.dpi) {
         uint8_t sensor = 0;
         if (!app.dpi || !call(app.dpi, 1, &sensor, 1) ||
             !mx_dpi_allowed(app.response + 4, app.response_length - 4, app.config.dpi)) okay = false;
@@ -291,7 +409,7 @@ static bool configure(void) {
             if (!call(app.dpi, 3, parameters, 3)) okay = false;
         }
     }
-    if (app.config.wheel_mode) {
+    if (app.config.wheel_mode && (app.smartshift || app.enhanced_shift)) {
         uint8_t index = app.enhanced_shift ? app.enhanced_shift : app.smartshift;
         uint8_t read_function = app.enhanced_shift ? 1 : 0;
         uint8_t write_function = app.enhanced_shift ? 2 : 1;
@@ -316,6 +434,10 @@ static bool configure(void) {
 
 static void initialise_device(void) {
     app.configuring = true;
+    if (app.receiver && !select_receiver_mouse()) {
+        status("waiting","No supported mouse is awake on the receiver. Wake the M705 and change a setting to retry.");
+        app.configuring=false; return;
+    }
     bool pinged = false;
     for (int i = 0; i < 3 && app.online && !app.stop; ++i) {
         uint8_t parameters[] = {0, 0, 0xa7};
@@ -362,6 +484,7 @@ static void initialise_device(void) {
     }
     if (app.online && !app.stop && !app.removed) {
         app.connected = true;
+        discover_battery();
         fprintf(stderr, "Features: controls=%02x wheel=%02x thumb=%02x dpi=%02x shift=%02x/%02x\n",
             app.controls, app.wheel, app.thumbwheel, app.dpi, app.smartshift, app.enhanced_shift);
         if (app.probe) status("probe", "Bluetooth HID++ capability query completed; no settings written.");
@@ -383,7 +506,8 @@ static void matched(void *context, IOReturn result, void *sender, IOHIDDeviceRef
         !CFNumberGetValue(vendor_value,kCFNumberIntType,&vendor) ||
         !CFNumberGetValue(product_value,kCFNumberIntType,&product)) return;
     const MXDeviceDefinition *definition=mx_device_lookup((uint32_t)vendor,(uint32_t)product);
-    if (!definition) return;
+    bool receiver=vendor==0x046d && product==0xc52b;
+    if ((!definition || !definition->bluetooth_direct) && !receiver) return;
     if (app.device) {
         if (app.removed && !app.pending_device) app.pending_device = (IOHIDDeviceRef)CFRetain(device);
         return;
@@ -395,6 +519,7 @@ static void matched(void *context, IOReturn result, void *sender, IOHIDDeviceRef
     if (opened != kIOReturnSuccess) { status("error", "Cannot open the mouse. Grant Input Monitoring to MX Mouse Helper."); return; }
     app.device = (IOHIDDeviceRef)CFRetain(device);
     app.definition = definition;
+    app.receiver=receiver; app.address=0xff;
     app.online = app.had_device = true;
     app.initialisation_attempted = false;
     IOHIDDeviceRegisterInputReportCallback(device, app.input, sizeof(app.input), input_report, NULL);
@@ -421,7 +546,7 @@ static void work(void *context) {
     }
     if (app.removed) {
         app.removed = false; close_device();
-        status("waiting", "Mouse disconnected. Waiting for a supported mouse over Bluetooth.");
+        status("waiting", "Mouse disconnected. Waiting for a supported Bluetooth or receiver mouse.");
         if (app.pending_device) {
             IOHIDDeviceRef device = app.pending_device;
             app.pending_device = NULL;
@@ -451,6 +576,28 @@ static void work(void *context) {
         app.initialisation_attempted = true;
         initialise_device();
     }
+    if (app.battery_requested) {
+        app.battery_requested = false;
+        read_battery(false);
+        publish_status_snapshot();
+    }
+    /* HID queries pump a nested run loop; re-signal work received during a read. */
+    if (app.stop || app.removed || app.reload || app.battery_requested) schedule_work();
+}
+
+static void publish_status_snapshot(void) {
+    char path[PATH_MAX];
+    if (!mx_path(path, "status.plist")) return;
+    CFPropertyListRef previous = mx_read_plist(path);
+    char state[64] = "waiting", detail[512] = "Waiting for the mouse.";
+    if (previous && CFGetTypeID(previous) == CFDictionaryGetTypeID()) {
+        CFTypeRef s = CFDictionaryGetValue(previous, CFSTR("state"));
+        CFTypeRef d = CFDictionaryGetValue(previous, CFSTR("detail"));
+        if (s && CFGetTypeID(s) == CFStringGetTypeID()) CFStringGetCString(s, state, sizeof(state), kCFStringEncodingUTF8);
+        if (d && CFGetTypeID(d) == CFStringGetTypeID()) CFStringGetCString(d, detail, sizeof(detail), kCFStringEncodingUTF8);
+    }
+    if (previous) CFRelease(previous);
+    mx_write_status(state, detail, app.connected);
 }
 
 static void notify(CFNotificationCenterRef center, void *observer, CFStringRef name,
@@ -459,20 +606,7 @@ static void notify(CFNotificationCenterRef center, void *observer, CFStringRef n
     if (CFEqual(name, CFSTR("local.mxmouse.reload"))) app.reload = true;
     else if (CFEqual(name, CFSTR("local.mxmouse.stop"))) app.stop = true;
     else if (CFEqual(name, CFSTR("local.mxmouse.status"))) {
-        char path[PATH_MAX];
-        if (mx_path(path, "status.plist")) {
-            CFPropertyListRef previous = mx_read_plist(path);
-            char state[64] = "waiting", detail[512] = "Waiting for the mouse.";
-            if (previous && CFGetTypeID(previous) == CFDictionaryGetTypeID()) {
-                CFTypeRef s = CFDictionaryGetValue(previous, CFSTR("state"));
-                CFTypeRef d = CFDictionaryGetValue(previous, CFSTR("detail"));
-                if (s && CFGetTypeID(s) == CFStringGetTypeID()) CFStringGetCString(s, state, sizeof(state), kCFStringEncodingUTF8);
-                if (d && CFGetTypeID(d) == CFStringGetTypeID()) CFStringGetCString(d, detail, sizeof(detail), kCFStringEncodingUTF8);
-            }
-            if (previous) CFRelease(previous);
-            mx_write_status(state, detail, app.connected);
-        }
-        return;
+        app.battery_requested = true;
     }
     schedule_work();
 }
@@ -585,9 +719,11 @@ int main(int argc, char **argv) {
     app.power = IORegisterForSystemPower(NULL, &app.power_port, power_changed, &app.power_notifier);
     if (app.power) CFRunLoopAddSource(CFRunLoopGetMain(), IONotificationPortGetRunLoopSource(app.power_port), kCFRunLoopDefaultMode);
     CFMutableArrayRef matches=CFArrayCreateMutable(NULL,0,&kCFTypeArrayCallBacks);
-    for(size_t i=0;i<mx_device_count();++i) {
+    for(size_t i=0;i<=mx_device_count();++i) {
         const MXDeviceDefinition *definition=mx_device_at(i);
-        int vendor=(int)definition->vendor_id, product=(int)definition->product_id;
+        if (definition && !definition->bluetooth_direct) continue;
+        int vendor=definition ? (int)definition->vendor_id : 0x046d;
+        int product=definition ? (int)definition->product_id : 0xc52b;
         CFNumberRef vendor_number=CFNumberCreate(NULL,kCFNumberIntType,&vendor);
         CFNumberRef product_number=CFNumberCreate(NULL,kCFNumberIntType,&product);
         const void *keys[]={CFSTR(kIOHIDVendorIDKey),CFSTR(kIOHIDProductIDKey)};
@@ -603,7 +739,7 @@ int main(int argc, char **argv) {
         IOHIDManagerRegisterDeviceRemovalCallback(app.manager, removed, NULL);
         IOHIDManagerScheduleWithRunLoop(app.manager, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
     }
-    status("waiting", offline ? "Offline measurement: HID device access is disabled." : "Waiting for a supported mouse over Bluetooth. The settings app can be closed.");
+    status("waiting", offline ? "Offline measurement: HID device access is disabled." : "Waiting for a supported Bluetooth or receiver mouse. The settings app can be closed.");
     IOReturn opened = offline ? kIOReturnSuccess : IOHIDManagerOpen(app.manager, kIOHIDOptionsTypeNone);
     if (opened != kIOReturnSuccess) {
         status("error", "Cannot open the HID manager. Check Input Monitoring for MX Mouse Helper.");

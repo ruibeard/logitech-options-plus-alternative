@@ -42,7 +42,7 @@ The helper uses non-persistent HID++ diversion. Graceful shutdown releases diver
 
 ## Architecture and adding devices
 
-The goal is one small shared helper, with model-specific definitions rather than a separate background process for every supported model. That foundation exists, but the current implementation still assumes one direct-Bluetooth mouse with five configurable controls.
+The goal is one small shared helper, with model-specific definitions rather than a separate background process for every supported model. That foundation exists, but the current implementation handles one active mouse: direct Bluetooth MX Master 3 for Mac or an M705 through a Unifying receiver.
 
 | Location | Responsibility |
 | --- | --- |
@@ -57,7 +57,7 @@ The goal is one small shared helper, with model-specific definitions rather than
 ### Contributing another Logitech model
 
 1. **Identify the exact model and connection.** Collect its vendor/product IDs, HID report descriptor, and available HID++ features from real hardware. Bluetooth and receiver connections need separate verification. Do not guess IDs from similar product names.
-2. **Add a device definition** in `src/device.c`, using verified control IDs. Update `tests/device_test.c`, which currently expects a single registered model. For a model that shares the existing five-control layout and direct-Bluetooth HID++ behavior, this is the starting point. Unknown models are deliberately ignored.
+2. **Add a device definition** in `src/device.c`, using verified control IDs. Update `tests/device_test.c`, to cover the new model. For a model that shares the existing five-control layout and direct-Bluetooth HID++ behavior, this is the starting point. Unknown models are deliberately ignored.
 3. **Check protocol compatibility** in `src/helper.c`. Report sizes and feature indices are discovered dynamically, but feature layouts and packet routing still have assumptions. Probe only after registering the device; `--probe` does not discover unregistered models. Stop the normal helper and competing controllers before probing.
 4. **Handle model capabilities explicitly.** Unsupported wheel, DPI, or extra-button features must be hidden or left native. More than five configurable controls requires changes across configuration/storage, helper state, and UI; preserve existing saved configurations when changing the schema.
 5. **Update the UI artwork and callouts** in `src/mouse_view.m` and the build resources if the physical layout differs. Images belong in Settings, not the resident helper.
@@ -69,7 +69,7 @@ For example, a future MX Master 3S addition should reuse the shared implementati
 ### Work needed for the wider MX family
 
 - **MX Master / 2S / 3 / 3S / 4 variants:** verified model definitions and capability checks, followed by hardware validation for each variant.
-- **Bolt and Unifying receivers:** transport discovery and per-device routing. Packets currently use the direct-device address `0xff`; adding a receiver ID alone will not work. The registry’s `bluetooth_direct` field is currently descriptive and does not implement another transport.
+- **More receiver models:** transport discovery and per-device routing. Unifying `c52b` receiver routing is implemented for the verified M705 pairing ID. Bluetooth uses `0xff`; receiver queries use `0xff` and selected mouse traffic uses its paired slot. Other receiver families and models still require discovery/routing tests.
 - **MX Master 4 extra controls and haptics:** additional control definitions and verified protocol handling, plus a UI/configuration that can represent them.
 - **Multiple simultaneous mice:** per-device connection state and configuration; the current helper has one active device and global settings.
 - **Other vendors:** a separate protocol backend for vendor-specific settings; Logitech HID++ handling cannot be assumed to apply.

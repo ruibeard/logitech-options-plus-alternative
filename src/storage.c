@@ -167,6 +167,16 @@ bool mx_write_permissions(void) {
     return written;
 }
 
+static const char *device_name;
+void mx_set_device_name(const char *name) { device_name=name; }
+static int battery_percent = -1, battery_charging = -1;
+static const char *battery_status;
+void mx_set_battery(int percent, const char *status, int charging) {
+    battery_percent = percent;
+    battery_status = status;
+    battery_charging = charging;
+}
+
 void mx_write_status(const char *state, const char *detail, bool connected) {
     char path[PATH_MAX];
     if (!mx_path(path, "status.plist")) return;
@@ -176,10 +186,24 @@ void mx_write_status(const char *state, const char *detail, bool connected) {
     CFDictionarySetValue(root, CFSTR("state"), value); CFRelease(value);
     value = CFStringCreateWithCString(NULL, detail, kCFStringEncodingUTF8);
     CFDictionarySetValue(root, CFSTR("detail"), value); CFRelease(value);
+    if (device_name) {
+        CFStringRef name=CFStringCreateWithCString(NULL,device_name,kCFStringEncodingUTF8);
+        CFDictionarySetValue(root,CFSTR("deviceName"),name); CFRelease(name);
+    }
     int pid = getpid();
     CFNumberRef number_value = CFNumberCreate(NULL, kCFNumberIntType, &pid);
     CFDictionarySetValue(root, CFSTR("pid"), number_value); CFRelease(number_value);
     CFDictionarySetValue(root, CFSTR("connected"), connected ? kCFBooleanTrue : kCFBooleanFalse);
+    if (connected && battery_percent >= 0 && battery_percent <= 100) {
+        number_value = CFNumberCreate(NULL, kCFNumberIntType, &battery_percent);
+        CFDictionarySetValue(root, CFSTR("batteryPercent"), number_value); CFRelease(number_value);
+    }
+    if (connected && battery_status) {
+        value = CFStringCreateWithCString(NULL, battery_status, kCFStringEncodingUTF8);
+        CFDictionarySetValue(root, CFSTR("batteryStatus"), value); CFRelease(value);
+    }
+    if (connected && (battery_charging == 0 || battery_charging == 1))
+        CFDictionarySetValue(root, CFSTR("batteryCharging"), battery_charging ? kCFBooleanTrue : kCFBooleanFalse);
     task_vm_info_data_t info = {0}; mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
     if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&info, &count) == KERN_SUCCESS) {
         int64_t footprint = (int64_t)info.phys_footprint;
