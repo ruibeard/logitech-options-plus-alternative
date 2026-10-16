@@ -67,8 +67,8 @@ def info(bundle, identifier, executable, background=False):
         "CFBundleExecutable": executable,
         "CFBundlePackageType": "APPL",
         "CFBundleIconFile": "MXMouseHelper" if background else "MXMouse",
-        "CFBundleShortVersionString": "0.1.1",
-        "CFBundleVersion": "2",
+        "CFBundleShortVersionString": "0.1.2",
+        "CFBundleVersion": "3",
         "LSMinimumSystemVersion": "13.0",
         "NSHighResolutionCapable": True,
     }

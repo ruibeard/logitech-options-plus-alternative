@@ -30,9 +30,10 @@ def main():
         ("core", ["src/core.c", "tests/core_test.c"], []),
         ("storage", ["src/core.c", "src/storage.c", "tests/storage_test.c"], FRAMEWORKS),
         ("device", ["src/device.c", "tests/device_test.c"], []),
+        ("helper", ["src/core.c", "src/storage.c", "src/device.c", "tests/helper_test.c"], FRAMEWORKS),
     ):
         binary = BUILD / f"{name}-tests"
-        run("xcrun", "clang", "-std=c11", *FLAGS, *sources, *frameworks, "-o", binary)
+        run("xcrun", "clang", "-std=c11", "-fblocks", *FLAGS, *sources, *frameworks, "-o", binary)
         isolated_run(binary)
 
     objects = []

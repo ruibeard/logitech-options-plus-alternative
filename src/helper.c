@@ -26,6 +26,8 @@ static struct {
     IOHIDDeviceRef pending_device;
     CFRunLoopSourceRef work;
     CFRunLoopTimerRef smooth_timer;
+    CFRunLoopTimerRef reconnect_timer;
+    unsigned reconnect_delay;
     CGEventSourceRef event_source;
     MXConfig config;
     uint8_t input[MX_REPORT_MAX], response[MX_REPORT_MAX];
@@ -55,6 +57,32 @@ static struct {
 static void schedule_work(void) {
     if (app.work) CFRunLoopSourceSignal(app.work);
     CFRunLoopWakeUp(CFRunLoopGetMain());
+}
+
+static void cancel_reconnect(void) {
+    if (!app.reconnect_timer) return;
+    CFRunLoopTimerInvalidate(app.reconnect_timer);
+    CFRelease(app.reconnect_timer);
+    app.reconnect_timer = NULL;
+}
+
+static void reconnect_tick(CFRunLoopTimerRef timer, void *context) {
+    (void)timer; (void)context;
+    cancel_reconnect();
+    if (!app.online || app.connected || app.stop || app.removed) return;
+    app.initialisation_attempted = false;
+    schedule_work();
+}
+
+/* Discovery can precede a usable Bluetooth link. Retry only failed handshakes,
+   backing off to 30 seconds; a healthy connection has no reconnect timer. */
+static void retry_connection(void) {
+    if (app.probe || !app.online || app.connected || app.stop || app.removed || app.reconnect_timer) return;
+    unsigned delay = app.reconnect_delay ? app.reconnect_delay : 1;
+    app.reconnect_delay = delay >= 16 ? 30 : delay * 2;
+    app.reconnect_timer = CFRunLoopTimerCreate(NULL, CFAbsoluteTimeGetCurrent() + delay,
+        0, 0, 0, reconnect_tick, NULL);
+    CFRunLoopAddTimer(CFRunLoopGetMain(), app.reconnect_timer, kCFRunLoopDefaultMode);
 }
 
 static void status(const char *state, const char *message) {
@@ -342,6 +370,8 @@ static bool restore(void) {
 }
 
 static void close_device(void) {
+    cancel_reconnect();
+    app.reconnect_delay = 0;
     app.configuring = true;
     if (!restore()) app.restoration_failed = true;
     app.connected = false;
@@ -435,8 +465,11 @@ static bool configure(void) {
 static void initialise_device(void) {
     app.configuring = true;
     if (app.receiver && !select_receiver_mouse()) {
-        status("waiting","No supported mouse is awake on the receiver. Wake the M705 and change a setting to retry.");
-        app.configuring=false; return;
+        status("waiting","No supported mouse is awake on the receiver. Retrying automatically; wake the M705 to connect.");
+        retry_connection();
+        app.configuring=false;
+        if (app.stop || app.removed || app.reload) schedule_work();
+        return;
     }
     bool pinged = false;
     for (int i = 0; i < 3 && app.online && !app.stop; ++i) {
@@ -446,8 +479,10 @@ static void initialise_device(void) {
         }
     }
     if (!pinged) {
-        status("error", "No HID++ reply. Wake or reconnect the mouse, then change a setting to retry; check Input Monitoring and other mouse utilities.");
+        status("error", "Mouse controls are inactive: no HID++ reply. Retrying automatically; wake the mouse and check Input Monitoring or other mouse utilities if this continues.");
+        retry_connection();
         app.configuring = false;
+        if (app.stop || app.removed || app.reload) schedule_work();
         return;
     }
     app.controls = feature(0x1b04);
@@ -484,6 +519,8 @@ static void initialise_device(void) {
     }
     if (app.online && !app.stop && !app.removed) {
         app.connected = true;
+        cancel_reconnect();
+        app.reconnect_delay = 0;
         discover_battery();
         fprintf(stderr, "Features: controls=%02x wheel=%02x thumb=%02x dpi=%02x shift=%02x/%02x\n",
             app.controls, app.wheel, app.thumbwheel, app.dpi, app.smartshift, app.enhanced_shift);
@@ -566,8 +603,12 @@ static void work(void *context) {
             return;
         }
         app.config = replacement;
-        /* A settings reload or system wake permits one new bounded handshake. */
-        if (!app.connected) app.initialisation_attempted = false;
+        /* A settings reload or system wake retries immediately. */
+        if (!app.connected) {
+            cancel_reconnect();
+            app.reconnect_delay = 0;
+            app.initialisation_attempted = false;
+        }
         if (app.connected && !app.probe) configure();
         app.configuring = false;
         if (app.stop || app.removed || app.reload) schedule_work();

@@ -8,6 +8,8 @@ Physical footprint is the "Memory" value in Activity Monitor. Physical footprint
 
 The helper uses callbacks instead of an input-polling loop. It has no repeating status timer while Settings is closed; its smoothing timer runs only during an active scroll animation.
 
+If a discovered mouse does not answer its initial HID++ handshake, the helper retries after 1, 2, 4, 8, 16, then 30 seconds between attempts. Retries stop on connection, removal, or shutdown. This handles Bluetooth discovery arriving before the link can accept commands; changing a setting or waking the Mac also permits an immediate retry.
+
 ```sh
 python3 scripts/measure.py
 ```
