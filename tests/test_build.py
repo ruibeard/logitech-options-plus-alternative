@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import unittest
 import sys
+import subprocess
 from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
@@ -12,6 +13,14 @@ import build
 
 
 class InstallTests(unittest.TestCase):
+    def test_login_item_process_blocks_install(self):
+        def process(arguments, **kwargs):
+            return subprocess.CompletedProcess(arguments, 0 if arguments[-1] == "local.mxmouse.helper" else 1)
+
+        with patch.object(build.subprocess, "run", side_effect=process):
+            with self.assertRaisesRegex(RuntimeError, "Quit MX Mouse Settings"):
+                build.require_apps_stopped()
+
     def test_clean_replacement_and_failed_verification_preserve_install(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)

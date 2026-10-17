@@ -193,8 +193,10 @@ bool mx_conflicting_process(char output[256]) {
     for (int i = 0; i < length / (int)sizeof(pid_t); ++i) {
         char name[PROC_PIDPATHINFO_MAXSIZE];
         if (pids[i] <= 0 || pids[i] == getpid() || proc_pidpath(pids[i], name, sizeof(name)) <= 0) continue;
-        if (strstr(name, "/openlogi-agent")) { snprintf(output, 256, "OpenLogi Agent is running. Quit OpenLogi before starting MX Mouse."); return true; }
-        if (strstr(name, "/logioptionsplus_agent")) { snprintf(output, 256, "Logi Options+ Agent is running. Quit Options+ before starting MX Mouse."); return true; }
+        const char *executable = strrchr(name, '/');
+        executable = executable ? executable + 1 : name;
+        if (!strcmp(executable, "openlogi-agent")) { snprintf(output, 256, "OpenLogi Agent is running. Quit OpenLogi before starting MX Mouse."); return true; }
+        if (!strcmp(executable, "logioptionsplus_agent")) { snprintf(output, 256, "Logi Options+ Agent is running. Quit Options+ before starting MX Mouse."); return true; }
     }
     return false;
 }

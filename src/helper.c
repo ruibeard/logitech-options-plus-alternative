@@ -873,6 +873,16 @@ static void work(void *context) {
     else if (pending || runtime.reload || runtime.battery_requested) schedule_work();
 }
 
+static const char *connection_name(const Mouse *mouse) {
+    if(mouse->receiver) return mouse->transport->receiver_kind == MX_RECEIVER_BOLT ? "Bolt" : "Unifying";
+    CFTypeRef transport=mouse->transport->device ? IOHIDDeviceGetProperty(mouse->transport->device,CFSTR(kIOHIDTransportKey)) : NULL;
+    if(transport && CFGetTypeID(transport)==CFStringGetTypeID()) {
+        if(CFStringHasPrefix(transport,CFSTR("Bluetooth"))) return "Bluetooth";
+        if(CFEqual(transport,CFSTR("USB"))) return "USB";
+    }
+    return "Direct HID++";
+}
+
 static void publish_status_snapshot(void) {
     size_t count = 0;
     for (Mouse *mouse = runtime.mice; mouse; mouse = mouse->next) ++count;
@@ -887,7 +897,7 @@ static void publish_status_snapshot(void) {
         for (size_t j = 0; j < mouse->control_count; ++j)
             if (mouse->controls_info[j].cid == 0x01a0) capabilities |= MX_CAP_HAPTIC;
         snapshots[i++] = (MXDeviceSnapshot){.id = mouse->id, .name = mouse->name,
-            .transport = mouse->receiver ? (mouse->transport->receiver_kind == MX_RECEIVER_BOLT ? "Bolt" : "Unifying") : "Direct HID++",
+            .transport = connection_name(mouse),
             .state = mouse->state, .detail = mouse->detail, .connected = mouse->connected, .capabilities = capabilities,
             .controls = mouse->controls_info, .control_count = mouse->control_count,
             .battery_percent = mouse->battery_percent, .battery_charging = mouse->battery_charging, .battery_status = mouse->battery_status};

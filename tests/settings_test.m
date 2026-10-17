@@ -22,7 +22,8 @@ static NSDictionary *device(NSString *identity, NSString *name, NSArray *control
 }
 static SettingsTestDelegate *editor(void) {
     SettingsTestDelegate *ui=[SettingsTestDelegate new];
-    ui.deviceSelector=[[NSPopUpButton alloc] initWithFrame:NSZeroRect];
+    ui.deviceSidebar=[[NSScrollView alloc] initWithFrame:NSMakeRect(0,0,164,650)];
+    ui.deviceSidebar.documentView=[[NSView alloc] initWithFrame:ui.deviceSidebar.bounds];
     ui.mouseView=[[MXMouseView alloc] initWithFrame:NSZeroRect];
     ui.diagramLines=[[MXDiagram alloc] initWithFrame:NSZeroRect];
     ui.controlList=[[NSScrollView alloc] initWithFrame:NSZeroRect];
@@ -77,7 +78,7 @@ int main(void) {
         assert(mx_binding_for_control(&config,0xc3,3)->key==21 && mx_binding_for_control(&config,0x1a0,-1)->key==49);
         assert(mx_binding_for_control(&config,0xbd,1)->key==30 && mx_binding_for_control(&config,0x53,1)->key==33);
         // Switching flushes the previous profile's pending reload, then loads the selected profile.
-        [ui.deviceSelector selectItemAtIndex:1]; [ui deviceChanged:ui.deviceSelector];
+        [ui.deviceButtons[1] performClick:nil];
         assert(!ui.pendingApply && [ui.selectedDeviceID isEqual:@"m705"] && ![ui controlForSlot:3]);
         [ui.modes[3] selectItemAtIndex:MX_DISABLED]; ui.verticalSpeed.integerValue=140; assert([ui save]);
         after=readDictionary(supportPath(@"settings.plist"));
@@ -114,9 +115,9 @@ int main(void) {
         // Fresh settings windows prefer a connected mouse over stale offline entries.
         NSMutableDictionary *offlineMaster=[master3 mutableCopy]; offlineMaster[@"connected"]=@NO; offlineMaster[@"state"]=@"error";
         SettingsTestDelegate *fresh=editor(); fresh.testStatus=@{@"devices":@[offlineMaster,m705]}; [fresh refresh:nil];
-        assert([fresh.selectedDeviceID isEqual:@"m705"] && fresh.deviceSelector.indexOfSelectedItem==1);
+        assert([fresh.selectedDeviceID isEqual:@"m705"] && fresh.deviceButtons[1].state==NSControlStateValueOn);
         // A deliberate selection of an offline mouse remains stable while another is active.
-        [fresh.deviceSelector selectItemAtIndex:0]; [fresh deviceChanged:fresh.deviceSelector]; [fresh refresh:nil];
+        [fresh.deviceButtons[0] performClick:nil]; [fresh refresh:nil];
         assert([fresh.selectedDeviceID isEqual:@"master3"] && ![fresh.selectedDevice[@"connected"] boolValue]);
         // Wheel tilt requires the list while retaining the known M705 artwork.
         NSDictionary *tiltM705=device(@"m705",@"M705",@[control(0x52,0,@"Middle"),control(0x5b,-1,@"Wheel tilt left"),control(0x5d,-1,@"Wheel tilt right")]);

@@ -29,7 +29,8 @@ def run(*arguments, quiet_success=False):
 
 
 def require_apps_stopped():
-    for executable in ("mxmouse-settings", "mxmouse-helper"):
+    # Login items can run with their bundle identifier as the process name.
+    for executable in ("mxmouse-settings", "mxmouse-helper", "local.mxmouse.helper"):
         result = subprocess.run(["pgrep", "-x", executable], capture_output=True, text=True)
         if result.returncode == 0:
             raise RuntimeError("Quit MX Mouse Settings and stop its helper before installing. Disable Start at login in Settings, quit Settings, then stop the helper with pkill -TERM -x mxmouse-helper and retry.")
@@ -68,7 +69,7 @@ def info(bundle, identifier, executable, background=False):
         "CFBundlePackageType": "APPL",
         "CFBundleIconFile": "MXMouseHelper" if background else "MXMouse",
         "CFBundleShortVersionString": "0.2.0",
-        "CFBundleVersion": "5",
+        "CFBundleVersion": "6",
         "LSMinimumSystemVersion": "13.0",
         "NSHighResolutionCapable": True,
     }
@@ -105,6 +106,8 @@ def main():
     resources.mkdir(exist_ok=True)
     shutil.copyfile(ROOT / "assets/mx-master-3.png", resources / "mx-master-3.png")
     shutil.copyfile(ROOT / "assets/m705.png", resources / "m705.png")
+    for name in ("bluetooth", "unifying", "bolt"):
+        shutil.copyfile(ROOT / f"assets/connection-{name}.pdf", resources / f"connection-{name}.pdf")
     run("iconutil", "-c", "icns", BUILD / "MXMouse.iconset", "-o", resources / "MXMouse.icns")
     helper_resources = HELPER / "Contents/Resources"
     helper_resources.mkdir(exist_ok=True)
