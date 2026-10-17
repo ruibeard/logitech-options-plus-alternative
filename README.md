@@ -2,11 +2,13 @@
 
 A lightweight native macOS alternative to Logitech Logi Options+ for compatible Logitech HID++ mice.
 
-|        |   MX Mouse | MX Mouse UI (earlier build) | Logi Options+ |
+|        | MX Mouse helper (normal use) | Settings UI (only while open) | Logi Options+ |
 |--------|-----------:|------------:|--------------:|
-| Memory | **3.05–4.39 MiB** |     29.1 MiB |       120+ MB |
+| Memory | **3.05–4.39 MiB** | **~29.1 MiB while open; 0 when closed** | 120+ MB |
 
-Close the window to leave only the helper running. The helper range was measured with one M705 active; memory with two awake mice is still unverified. See [measurements and validation](docs/development.md#footprint).
+**During normal use, only the small helper runs.** Open Settings to configure shortcuts and mouse options; its UI temporarily uses additional memory (~29.1 MiB measured in an earlier build). **Closing the Settings window exits the UI and releases its memory.** Your shortcuts and mouse settings keep working through the helper.
+
+The helper range was measured with one M705 active; memory with two awake mice is still unverified. See [measurements and validation](docs/development.md#footprint).
 
 ![MX Mouse Settings](docs/images/settings.png)
 

@@ -126,22 +126,50 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
 }
 @end
 
+// Positions from the installed M705 Options+ core_metadata.json; controls still
+// come from HID++ discovery, so variants never acquire absent buttons.
+static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
+    switch(cid) {
+        case 0x52: *marker=NSMakePoint(66.5,18); *callout=NSMakeRect(450,340,200,72); break;
+        case 0x53: *marker=NSMakePoint(43,60); *callout=NSMakeRect(0,175,195,72); break;
+        case 0x56: *marker=NSMakePoint(35,47); *callout=NSMakeRect(0,275,195,72); break;
+        case 0x59: *marker=NSMakePoint(6,54.5); *callout=NSMakeRect(0,75,195,72); break;
+        case 0x5b: *marker=NSMakePoint(63,24.5); *callout=NSMakeRect(450,245,200,72); break;
+        case 0x5d: *marker=NSMakePoint(75,21); *callout=NSMakeRect(450,150,200,72); break;
+        default: return NO;
+    }
+    return YES;
+}
+
 @interface MXDiagram : NSView
 @property NSArray<NSValue *> *anchors;
 @property NSArray<NSValue *> *ends;
 @property BOOL compactMouse;
 @property NSIndexSet *visibleControls;
+@property NSArray<NSDictionary *> *mappedControls;
 @end
 @implementation MXDiagram
 - (NSView *)hitTest:(NSPoint)point { (void)point; return nil; }
 - (void)drawRect:(NSRect)rect {
     (void)rect;
     NSColor *ink = [NSColor.secondaryLabelColor colorWithAlphaComponent:0.48];
-    for (NSUInteger i = 0; i < self.anchors.count; ++i) {
-        if (self.visibleControls && ![self.visibleControls containsIndex:i]) continue;
-        if (self.compactMouse && i >= 4) continue;
-        NSPoint point = self.anchors[i].pointValue, start = self.ends[i].pointValue;
-        if(self.compactMouse) {
+    NSMutableArray<NSValue *> *anchors=[self.anchors mutableCopy], *ends=[self.ends mutableCopy];
+    if(self.mappedControls) {
+        anchors=[NSMutableArray new]; ends=[NSMutableArray new];
+        for(NSDictionary *control in self.mappedControls) {
+            NSPoint marker; NSRect card;
+            if(!m705Layout([control[@"cid"] unsignedIntValue],&marker,&card)) continue;
+            // The 1169×1916 image is centered in the 270×430 view at (205,10).
+            NSPoint point=NSMakePoint(208.82+262.36*marker.x/100,440-430*marker.y/100);
+            [anchors addObject:[NSValue valueWithPoint:point]];
+            [ends addObject:[NSValue valueWithPoint:NSMakePoint(card.origin.x<200 ? NSMaxX(card)-6 : card.origin.x+6,NSMidY(card))]];
+        }
+    }
+    for (NSUInteger i = 0; i < anchors.count; ++i) {
+        if (!self.mappedControls && self.visibleControls && ![self.visibleControls containsIndex:i]) continue;
+        if (!self.mappedControls && self.compactMouse && i >= 4) continue;
+        NSPoint point = anchors[i].pointValue, start = ends[i].pointValue;
+        if(self.compactMouse && !self.mappedControls) {
             NSPoint compactAnchors[]={NSMakePoint(338,337),NSMakePoint(289,253),NSMakePoint(266,286),NSMakePoint(275,183)};
             point=compactAnchors[i];
         }
@@ -215,6 +243,7 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
 @property NSTextField *selectionTitle;
 @property NSMutableArray<NSView *> *buttonPanes;
 @property NSMutableArray<MXCallout *> *callouts;
+@property NSMutableArray<MXCallout *> *extraCallouts;
 @property NSInteger selectedButton;
 @property SMAppService *loginService;
 @property NSTimer *statusTimer;
@@ -288,7 +317,7 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
     NSView *diagram = [[NSView alloc] initWithFrame:NSMakeRect(26, 168, 660, 440)]; [root addSubview:diagram];
     MXMouseView *mouse = [[MXMouseView alloc] initWithFrame:NSMakeRect(205, 10, 270, 430)]; [diagram addSubview:mouse]; self.mouseView=mouse;
     MXDiagram *arrows=[[MXDiagram alloc] initWithFrame:diagram.bounds]; [diagram addSubview:arrows]; self.diagramLines=arrows;
-    self.callouts = [NSMutableArray new];
+    self.callouts = [NSMutableArray new]; self.extraCallouts=[NSMutableArray new];
     NSArray *names = @[@"Middle button", @"Back", @"Forward", @"Thumb button", @"Top button"];
     NSArray<NSValue *> *frames = @[[NSValue valueWithRect:NSMakeRect(432,340,177,72)], [NSValue valueWithRect:NSMakeRect(270,75,174,72)], [NSValue valueWithRect:NSMakeRect(94,235,176,72)], [NSValue valueWithRect:NSMakeRect(0,145,211,90)], [NSValue valueWithRect:NSMakeRect(452,250,185,90)]];
     self.modes = [NSMutableArray new]; self.recorders = [NSMutableArray new]; self.buttonPanes = [NSMutableArray new];
@@ -319,6 +348,9 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
     }
     // Additional HID++ controls share the same editor, without adding a fixed model layout.
     for(NSUInteger i=MX_BUTTON_COUNT;i<MX_BUTTON_COUNT+MX_EXTRA_BUTTON_COUNT;++i) {
+        MXCallout *callout=[[MXCallout alloc] initWithFrame:NSZeroRect]; callout.bordered=NO;
+        callout.tag=(NSInteger)i; callout.target=self; callout.action=@selector(selectButton:); callout.hidden=YES;
+        [diagram addSubview:callout]; [self.extraCallouts addObject:callout];
         NSView *pane=[[NSView alloc] initWithFrame:NSMakeRect(0,0,240,88)]; pane.hidden=YES; [buttonEditor addSubview:pane]; [self.buttonPanes addObject:pane];
         NSPopUpButton *mode=[[NSPopUpButton alloc] initWithFrame:NSMakeRect(0,46,232,30) pullsDown:NO];
         [mode addItemsWithTitles:@[@"Mouse default",@"Keyboard shortcut",@"Do nothing"]]; mode.tag=(NSInteger)i; mode.target=self; mode.action=@selector(modeChanged:); [pane addSubview:mode]; [self.modes addObject:mode];
@@ -380,6 +412,8 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
             NSInteger index=arguments[selection+1].integerValue;
             if(index>=0 && index<MX_BUTTON_COUNT) { self.selectedButton=index; [self updateCallouts]; }
         }
+        NSUInteger deviceSelection=[arguments indexOfObject:@"--preview-device"];
+        if(deviceSelection!=NSNotFound && deviceSelection+1<arguments.count) self.selectedDeviceID=arguments[deviceSelection+1];
         [self refresh:nil];
         NSView *view=self.window.contentView;
         [view layoutSubtreeIfNeeded];
@@ -450,8 +484,61 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
     for(NSDictionary *control in self.availableControls) if([control[@"slot"] unsignedIntegerValue]==slot) return control;
     return nil;
 }
+- (NSArray *)rememberedDevices:(NSDictionary *)status {
+    NSString *path=supportPath(@"known-devices.plist");
+    NSDictionary *saved=readDictionary(path);
+    NSMutableDictionary *known=[saved mutableCopy];
+    NSMutableArray *entries=[NSMutableArray new]; NSMutableSet *seen=[NSMutableSet new];
+    NSArray *live=[status[@"devices"] isKindOfClass:NSArray.class] ? status[@"devices"] : @[];
+    for(id item in live) {
+        if(![item isKindOfClass:NSDictionary.class]) continue;
+        NSDictionary *device=item;
+        NSString *identity=[device[@"id"] isKindOfClass:NSString.class] ? device[@"id"] : nil;
+        if(!identity.length) continue;
+        [seen addObject:identity];
+        NSDictionary *previous=[known[identity] isKindOfClass:NSDictionary.class] ? known[identity] : nil;
+        NSArray *controls=[device[@"controls"] isKindOfClass:NSArray.class] ? device[@"controls"] : @[];
+        NSMutableDictionary *entry=[device mutableCopy];
+        if([device[@"connected"] boolValue] && controls.count) {
+            // Persist layout only, never stale live connection/battery state or bindings.
+            NSMutableDictionary *layout=[NSMutableDictionary new];
+            for(NSString *key in @[@"id",@"name",@"transport",@"controls",@"capabilities"]) if(device[key]) layout[key]=device[key];
+            known[identity]=layout;
+        } else if(![device[@"connected"] boolValue]) {
+            if(previous) {
+                for(NSString *key in @[@"name",@"transport",@"controls",@"capabilities"]) if(previous[key]) entry[key]=previous[key];
+            } else if(!controls.count && ([identity hasPrefix:@"logitech-4082-"] || [identity hasPrefix:@"logitech-b023-"])) {
+                // Existing MX Master 3 installs predate the cache. These exact
+                // model IDs have a known layout; live discovery supersedes it.
+                NSMutableArray *legacy=[NSMutableArray new];
+                const MXDeviceDefinition *model=mx_device_lookup(0x046d,0xb023);
+                for(NSUInteger slot=0;model && slot<MX_BUTTON_COUNT;++slot) {
+                    unsigned cid=model->button_controls[slot]; if(!cid) continue;
+                    const char *name=mx_control_name(cid);
+                    [legacy addObject:@{@"cid":@(cid),@"slot":@(slot),@"name":name ? @(name) : @"Mouse control",@"divertible":@YES}];
+                }
+                entry[@"controls"]=legacy;
+                entry[@"capabilities"]=@{@"buttons":@YES,@"verticalScroll":@YES,@"horizontalScroll":@YES,
+                    @"dpi":@YES,@"wheelMode":@YES,@"smartShift":@YES,@"battery":@YES};
+                NSMutableDictionary *layout=[NSMutableDictionary new];
+                for(NSString *key in @[@"id",@"name",@"transport",@"controls",@"capabilities"]) if(entry[key]) layout[key]=entry[key];
+                known[identity]=layout;
+            }
+        }
+        [entries addObject:entry];
+    }
+    // A receiver or Bluetooth removal must not remove the saved mouse from Settings.
+    for(NSString *identity in [[known allKeys] sortedArrayUsingSelector:@selector(compare:)]) {
+        if([seen containsObject:identity] || ![known[identity] isKindOfClass:NSDictionary.class]) continue;
+        NSMutableDictionary *entry=[known[identity] mutableCopy];
+        entry[@"connected"]=@NO; entry[@"state"]=@"waiting"; entry[@"detail"]=@"Mouse is offline. Showing saved settings.";
+        [entries addObject:entry];
+    }
+    if(path && ![known isEqual:saved]) mx_write_plist(path.fileSystemRepresentation,(__bridge CFDictionaryRef)known);
+    return entries;
+}
 - (NSDictionary *)updateDevice:(NSDictionary *)status {
-    NSArray *entries=[status[@"devices"] isKindOfClass:NSArray.class] ? status[@"devices"] : @[];
+    NSArray *entries=[self rememberedDevices:status];
     self.devices=entries;
     NSDictionary *device=nil;
     for(NSDictionary *candidate in entries) if([candidate[@"id"] isEqual:self.selectedDeviceID]) { device=candidate; break; }
@@ -502,17 +589,43 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
     changed=changed || ![self.availableControls isEqualToArray:editable];
     self.availableControls=editable;
     if(extraSlot>MX_BUTTON_COUNT) self.genericMouse=YES;
-    self.mouseView.hidden=self.diagramLines.hidden=self.genericMouse;
-    self.mouseView.frame=compact ? NSMakeRect(155,50,400,350) : NSMakeRect(205,10,270,430);
+    BOOL mappedM705=compact;
+    for(NSDictionary *control in editable) {
+        NSPoint marker; NSRect frame;
+        if(!m705Layout([control[@"cid"] unsignedIntValue],&marker,&frame)) mappedM705=NO;
+    }
+    if(mappedM705) self.genericMouse=NO;
+    self.diagramLines.mappedControls=mappedM705 ? editable : nil;
+    // Extra controls need the list, but do not remove artwork for known models.
+    BOOL artworkWithList=self.genericMouse && (compact || master3);
+    self.mouseView.hidden=!(compact || master3);
+    self.diagramLines.hidden=self.genericMouse;
+    self.mouseView.frame=artworkWithList ? (compact ? NSMakeRect(0,70,280,300) : NSMakeRect(30,20,220,380)) :
+        (mappedM705 ? NSMakeRect(205,10,270,430) : compact ? NSMakeRect(155,50,400,350) : NSMakeRect(205,10,270,430));
+    self.controlList.frame=artworkWithList ? NSMakeRect(320,228,360,330) : NSMakeRect(60,228,600,330);
+    if(self.controlTable.tableColumns.count==2) {
+        self.controlTable.tableColumns[0].width=artworkWithList ? 175 : 285;
+        self.controlTable.tableColumns[1].width=artworkWithList ? 155 : 285;
+    }
     self.mouseView.compactMouse=compact; self.mouseView.needsDisplay=YES;
     self.diagramLines.compactMouse=compact;
     NSMutableIndexSet *visible=[NSMutableIndexSet new];
+    NSArray<NSValue *> *defaultFrames=@[[NSValue valueWithRect:NSMakeRect(432,340,177,72)], [NSValue valueWithRect:NSMakeRect(270,75,174,72)], [NSValue valueWithRect:NSMakeRect(94,235,176,72)], [NSValue valueWithRect:NSMakeRect(0,145,211,90)], [NSValue valueWithRect:NSMakeRect(452,250,185,90)]];
     for(NSUInteger i=0;i<MX_BUTTON_COUNT;++i) {
+        if(i<self.callouts.count) self.callouts[i].frame=defaultFrames[i].rectValue;
         BOOL present=[self controlForSlot:i]!=nil;
         self.callouts[i].hidden=self.genericMouse || !present;
         if(present) [visible addIndex:i];
     }
     if([self hasCapability:@"horizontalScroll"]) [visible addIndex:5];
+    for(MXCallout *callout in self.extraCallouts) callout.hidden=YES;
+    if(mappedM705) for(NSDictionary *control in editable) {
+        NSUInteger slot=[control[@"slot"] unsignedIntegerValue]; NSPoint marker; NSRect frame;
+        if(!m705Layout([control[@"cid"] unsignedIntValue],&marker,&frame)) continue;
+        MXCallout *callout=slot<MX_BUTTON_COUNT ? (slot<self.callouts.count ? self.callouts[slot] : nil) :
+            (slot-MX_BUTTON_COUNT<self.extraCallouts.count ? self.extraCallouts[slot-MX_BUTTON_COUNT] : nil);
+        callout.frame=frame; callout.hidden=NO;
+    }
     self.diagramLines.visibleControls=visible; self.diagramLines.needsDisplay=YES;
     for(NSView *view in self.wheelViews) view.hidden=![self hasCapability:@"wheelMode"];
     [self.wheelMode itemAtIndex:3].enabled=[self hasCapability:@"smartShift"];
@@ -556,6 +669,17 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
         self.callouts[i].selected=(NSInteger)i==self.selectedButton;
         self.callouts[i].needsDisplay=YES;
 
+    }
+    for(NSUInteger i=0;i<self.extraCallouts.count;++i) {
+        NSUInteger slot=i+MX_BUTTON_COUNT; NSDictionary *control=[self controlForSlot:slot];
+        MXCallout *callout=self.extraCallouts[i];
+        if(control) {
+            NSInteger mode=self.modes[slot].indexOfSelectedItem;
+            NSString *action=mode==MX_SHORTCUT ? shortcutLabel(self.recorders[slot].keyCode,self.recorders[slot].shortcutModifiers) : mode==MX_DISABLED ? @"Do nothing" : @"Mouse default";
+            callout.title=[NSString stringWithFormat:@"%@\n%@",control[@"name"] ?: @"Mouse control",action];
+            callout.accessibilityLabel=[callout.title stringByReplacingOccurrencesOfString:@"\n" withString:@", "];
+            callout.selected=(NSInteger)slot==self.selectedButton; callout.needsDisplay=YES;
+        }
     }
     for(NSUInteger i=0;i<self.buttonPanes.count;++i) self.buttonPanes[i].hidden=(NSInteger)i!=self.selectedButton || ![self controlForSlot:i];
     NSDictionary *selected=self.selectedButton>=0 ? [self controlForSlot:(NSUInteger)self.selectedButton] : nil;

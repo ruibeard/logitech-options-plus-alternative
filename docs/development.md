@@ -95,3 +95,15 @@ The supported feature paths are reprogrammable controls V4 (`1b04`), high-resolu
 7. **Validate the physical device.** Check press/release, shortcuts, native pointer/click behavior, supported wheels and DPI, simultaneous mice, receiver slot replacement, unplug/reconnect, sleep/wake and native behavior after graceful shutdown. Include model, transport, macOS version and measured resident memory with the report.
 
 Keep model claims proportional to the evidence. Wider HID++ feature coverage can be added without a resident framework, background web UI or another helper process; connected-device memory still needs measurement before adopting a build with a higher footprint.
+
+
+## Installed Options+ resource references
+
+Options+ stores its device catalog in `/Library/Application Support/Logi/LogiOptionsPlus/devices.json` and downloaded artwork in `depots/<build>/<device-depot>/`. The locally reviewed build `881239` (Options+ `2.9.994631`) contains a 191-entry device catalog; downloaded device artwork is limited to the devices it has fetched.
+
+Useful files are `manifest.json` (model-to-image mapping), `core_metadata.json` (image dimensions and button marker percentages), and the referenced WebP images. The M705 layout uses `m705_lcc/side.webp` and its metadata. The catalog distinguishes old M705 `4101b` controls 82/83/86/89/91/93 from newer `4406d` controls 82/83/86/91/93. The Master 4 entries list controls 82/83/86/195/196/416, but their artwork depots were not downloaded at inspection time.
+
+Use these as artwork/layout references, with credits recorded separately. The helper continues to discover actual device capabilities over HID++; catalog entries alone do not establish device support. Only Settings loads the selected bundled artwork; the resident helper does not load the catalog, image files, or Options+ components.
+
+
+Settings remembers discovered mouse names, controls, and capabilities in `~/Library/Application Support/MX Mouse/known-devices.plist`. This is separate from shortcut profiles in `settings.plist`. Offline devices remain selectable and editable using their last known layout, including after Settings or the helper restarts; fresh connected discovery replaces the cached layout. Connection and battery readings are never restored as live values. Existing MX Master 3 model IDs have a baseline button layout for upgrading installations that predate this cache. Unknown models require an initial successful connection with Settings open. The helper does not load this Settings-only cache.

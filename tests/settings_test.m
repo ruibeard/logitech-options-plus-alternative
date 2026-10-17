@@ -23,6 +23,14 @@ static NSDictionary *device(NSString *identity, NSString *name, NSArray *control
 static SettingsTestDelegate *editor(void) {
     SettingsTestDelegate *ui=[SettingsTestDelegate new];
     ui.deviceSelector=[[NSPopUpButton alloc] initWithFrame:NSZeroRect];
+    ui.mouseView=[[MXMouseView alloc] initWithFrame:NSZeroRect];
+    ui.diagramLines=[[MXDiagram alloc] initWithFrame:NSZeroRect];
+    ui.controlList=[[NSScrollView alloc] initWithFrame:NSZeroRect];
+    ui.callouts=[NSMutableArray new]; ui.extraCallouts=[NSMutableArray new];
+    for(NSUInteger i=0;i<6;++i) [ui.callouts addObject:[MXCallout new]];
+    for(NSUInteger i=0;i<MX_EXTRA_BUTTON_COUNT;++i) {
+        MXCallout *callout=[MXCallout new]; callout.tag=(NSInteger)(i+MX_BUTTON_COUNT); [ui.extraCallouts addObject:callout];
+    }
     ui.modes=[NSMutableArray new]; ui.recorders=[NSMutableArray new]; ui.buttonPanes=[NSMutableArray new];
     for(NSUInteger i=0;i<MX_BUTTON_COUNT+MX_EXTRA_BUTTON_COUNT;++i) {
         NSPopUpButton *mode=[[NSPopUpButton alloc] initWithFrame:NSZeroRect];
@@ -86,9 +94,12 @@ int main(void) {
         ui.verticalSpeed.integerValue=200; ui.invertVertical.state=NSControlStateValueOff; ui.smooth.state=NSControlStateValueOff;
         assert([ui save] && mx_load_device_config(&config,"m705",error,sizeof(error)));
         assert(config.vertical_speed==140 && config.invert_vertical && config.smooth);
-        // If the selected mouse disappears, fallback loads the remaining profile without saving stale UI values into it.
+        // A disappearing mouse remains selected with its saved layout and profile.
         NSDictionary *savedMX4=after[@"devices"][@"mx4"];
         ui.testStatus=@{@"devices":@[mx4]}; [ui refresh:nil];
+        assert([ui.selectedDeviceID isEqual:@"m705"] && ![ui.selectedDevice[@"connected"] boolValue]);
+        assert(ui.availableControls.count==3 && !ui.mouseView.hidden);
+        ui.selectedDeviceID=@"mx4"; ui.selectedDevice=nil; [ui refresh:nil];
         assert([ui.selectedDeviceID isEqual:@"mx4"] && ui.verticalSpeed.integerValue==79);
         assert([readDictionary(supportPath(@"settings.plist"))[@"devices"][@"mx4"] isEqual:savedMX4]);
         // Existing explicit overrides must be updated when editing a legacy-slot control.
@@ -96,7 +107,7 @@ int main(void) {
         assert(mx_binding_for_control(&config,0xc3,3)->key==50);
         assert(![ui canImportOptions]);
         NSDictionary *master3=device(@"master3",@"MX Master 3 for Mac",@[control(0xc3,3,@"Gesture")]);
-        ui.testStatus=@{@"devices":@[master3]}; [ui refresh:nil]; assert([ui canImportOptions]);
+        ui.selectedDeviceID=@"master3"; ui.selectedDevice=nil; ui.testStatus=@{@"devices":@[master3]}; [ui refresh:nil]; assert([ui canImportOptions]);
         NSDictionary *imported=[ui settingsByImportingProfile:@{@"buttons":@{@"thumb":binding(49)}} intoSettings:after];
         assert([imported[@"buttons"] isEqual:legacy[@"buttons"]] && [imported[@"devices"][@"mx4"] isEqual:after[@"devices"][@"mx4"]]);
         assert([imported[@"devices"][@"master3"][@"buttons"][@"thumb"][@"keyCode"] intValue]==49);
@@ -107,6 +118,40 @@ int main(void) {
         // A deliberate selection of an offline mouse remains stable while another is active.
         [fresh.deviceSelector selectItemAtIndex:0]; [fresh deviceChanged:fresh.deviceSelector]; [fresh refresh:nil];
         assert([fresh.selectedDeviceID isEqual:@"master3"] && ![fresh.selectedDevice[@"connected"] boolValue]);
+        // Wheel tilt requires the list while retaining the known M705 artwork.
+        NSDictionary *tiltM705=device(@"m705",@"M705",@[control(0x52,0,@"Middle"),control(0x5b,-1,@"Wheel tilt left"),control(0x5d,-1,@"Wheel tilt right")]);
+        fresh.selectedDeviceID=@"m705"; fresh.testStatus=@{@"devices":@[tiltM705]}; [fresh refresh:nil];
+        assert(!fresh.genericMouse && !fresh.mouseView.hidden && fresh.mouseView.compactMouse);
+        assert(fresh.controlList.hidden && !fresh.diagramLines.hidden);
+        assert(fresh.diagramLines.mappedControls.count==3);
+        assert(!fresh.extraCallouts[0].hidden && !fresh.extraCallouts[1].hidden);
+        [fresh selectButton:fresh.extraCallouts[1]];
+        assert([fresh controlForSlot:(NSUInteger)fresh.selectedButton][@"cid"] && fresh.selectedButton==6);
+        fresh.selectedDeviceID=@"master3"; fresh.testStatus=@{@"devices":@[master3]}; [fresh refresh:nil];
+        assert(!fresh.genericMouse && !fresh.mouseView.hidden && fresh.controlList.hidden);
+        assert(fresh.extraCallouts[0].hidden && !fresh.diagramLines.mappedControls);
+        assert(NSEqualRects(fresh.callouts[0].frame,NSMakeRect(432,340,177,72)));
+        fresh.selectedDeviceID=@"mx4"; fresh.testStatus=@{@"devices":@[mx4]}; [fresh refresh:nil];
+        assert(fresh.genericMouse && fresh.mouseView.hidden && !fresh.controlList.hidden);
+        // A fresh window after helper restart restores the layout with empty offline status.
+        SettingsTestDelegate *reopened=editor(); reopened.selectedDeviceID=@"m705";
+        NSMutableDictionary *sleeping=[tiltM705 mutableCopy]; sleeping[@"connected"]=@NO;
+        sleeping[@"controls"]=@[]; sleeping[@"capabilities"]=@{};
+        reopened.testStatus=@{@"devices":@[sleeping]}; [reopened refresh:nil];
+        assert(reopened.availableControls.count==3 && reopened.diagramLines.mappedControls.count==3);
+        assert([reopened hasCapability:@"verticalScroll"] && ![reopened.selectedDevice[@"connected"] boolValue]);
+        assert(mx_load_device_config(&config,"m705",error,sizeof(error)) && config.vertical_speed==140);
+        // New live discovery replaces cached controls, including removal of a thumb.
+        reopened.testStatus=@{@"devices":@[m705]}; [reopened refresh:nil];
+        assert(![reopened controlForSlot:5] && reopened.availableControls.count==3);
+        // A never-seen variant gets no guessed controls.
+        NSDictionary *unseen=@{@"id":@"unknown-m705",@"name":@"M705",@"connected":@NO,@"controls":@[]};
+        reopened.selectedDeviceID=@"unknown-m705"; reopened.testStatus=@{@"devices":@[unseen]}; [reopened refresh:nil];
+        assert(reopened.availableControls.count==0);
+        NSDictionary *legacyOffline=@{@"id":@"logitech-4082-old-install-2",@"name":@"MX Master 3",@"connected":@NO,@"controls":@[],@"capabilities":@{}};
+        reopened.selectedDeviceID=legacyOffline[@"id"]; reopened.testStatus=@{@"devices":@[legacyOffline]}; [reopened refresh:nil];
+        assert(reopened.availableControls.count==5 && [reopened hasCapability:@"horizontalScroll"]);
+        assert(!reopened.mouseView.hidden && !reopened.diagramLines.hidden);
         // With no connected devices, the first saved device remains a useful fallback.
         SettingsTestDelegate *allOffline=editor(); NSMutableDictionary *offlineM705=[m705 mutableCopy]; offlineM705[@"connected"]=@NO;
         allOffline.testStatus=@{@"devices":@[offlineMaster,offlineM705]}; [allOffline refresh:nil];
