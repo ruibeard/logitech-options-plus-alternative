@@ -28,7 +28,7 @@ def main():
     BUILD.mkdir(exist_ok=True)
     for name, sources, frameworks in (
         ("core", ["src/core.c", "tests/core_test.c"], []),
-        ("storage", ["src/core.c", "src/storage.c", "tests/storage_test.c"], FRAMEWORKS),
+        ("storage", ["src/core.c", "src/device.c", "src/storage.c", "tests/storage_test.c"], FRAMEWORKS),
         ("device", ["src/device.c", "tests/device_test.c"], []),
         ("helper", ["src/core.c", "src/storage.c", "src/device.c", "tests/helper_test.c"], FRAMEWORKS),
     ):
@@ -37,13 +37,20 @@ def main():
         isolated_run(binary)
 
     objects = []
-    for name in ("core", "storage"):
+    for name in ("core", "storage", "device"):
         obj = BUILD / f"import-{name}.o"
         run("xcrun", "clang", "-std=c11", *FLAGS, "-c", f"src/{name}.c", "-o", obj)
         objects.append(obj)
     binary = BUILD / "import-tests"
     run("xcrun", "clang", "-fobjc-arc", *FLAGS, "src/import_options.m",
         "tests/options_import_test.m", *objects, "-framework", "Foundation",
+        *FRAMEWORKS, "-lsqlite3", "-o", binary)
+    isolated_run(binary)
+    binary = BUILD / "settings-tests"
+    run("xcrun", "clang", "-fobjc-arc", "-fblocks", *FLAGS,
+        "tests/settings_test.m", "src/mouse_view.m", "src/import_options.m",
+        "src/logi_controls.m", "src/helper_drag_view.m", *objects,
+        "-framework", "AppKit", "-framework", "ServiceManagement",
         *FRAMEWORKS, "-lsqlite3", "-o", binary)
     isolated_run(binary)
     run(sys.executable, ROOT / "tests/test_build.py")

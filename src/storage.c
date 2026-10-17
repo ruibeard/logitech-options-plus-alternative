@@ -28,7 +28,9 @@ CFPropertyListRef mx_read_plist(const char *path) {
     int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     if (fd < 0) return NULL;
     struct stat info;
-    if (fstat(fd, &info) || info.st_size <= 0 || info.st_size > 65536) { close(fd); return NULL; }
+    /* Multiple device profiles and control inventories can exceed the old
+       single-mouse 64 KiB limit. Allocate only the actual file size. */
+    if (fstat(fd, &info) || info.st_size <= 0 || info.st_size > 1048576) { close(fd); return NULL; }
     size_t size = (size_t)info.st_size, offset = 0;
     UInt8 *buffer = malloc(size);
     if (!buffer) { close(fd); return NULL; }
@@ -94,43 +96,95 @@ static bool boolean(CFDictionaryRef dictionary, CFStringRef key, bool *output) {
     return false;
 }
 
-bool mx_load_config(MXConfig *config, char *error, size_t capacity) {
+static bool load_binding(CFTypeRef value, MXBinding *binding) {
+    if (!value || CFGetTypeID(value) != CFDictionaryGetTypeID()) return false;
+    int mode = binding->action, code = binding->key, modifiers = (int)binding->modifiers;
+    if (!number(value, CFSTR("mode"), 0, 2, &mode) ||
+        !number(value, CFSTR("keyCode"), 0, 127, &code) ||
+        !number(value, CFSTR("modifiers"), 0, 0x1e0000, &modifiers) ||
+        (modifiers & ~0x1e0000)) return false;
+    *binding = (MXBinding){(MXAction)mode, (uint16_t)code, (uint64_t)modifiers};
+    return true;
+}
+
+static bool apply_config(CFDictionaryRef dictionary, MXConfig *config) {
+    if (!number(dictionary, CFSTR("dpi"), 0, 65535, &config->dpi) ||
+        !number(dictionary, CFSTR("wheelMode"), 0, 3, &config->wheel_mode) ||
+        !number(dictionary, CFSTR("smartShift"), 1, 50, &config->smartshift) ||
+        !number(dictionary, CFSTR("verticalSpeed"), 10, 300, &config->vertical_speed) ||
+        !number(dictionary, CFSTR("horizontalSpeed"), 10, 300, &config->horizontal_speed) ||
+        !boolean(dictionary, CFSTR("invertVertical"), &config->invert_vertical) ||
+        !boolean(dictionary, CFSTR("invertHorizontal"), &config->invert_horizontal) ||
+        !boolean(dictionary, CFSTR("smooth"), &config->smooth)) return false;
+    CFTypeRef bindings = CFDictionaryGetValue(dictionary, CFSTR("buttons"));
+    if (bindings && CFGetTypeID(bindings) != CFDictionaryGetTypeID()) return false;
+    if (bindings) for (size_t i = 0; i < MX_BUTTON_COUNT; ++i) {
+        CFStringRef key = CFStringCreateWithCString(NULL, mx_button_keys[i], kCFStringEncodingUTF8);
+        CFTypeRef binding = CFDictionaryGetValue(bindings, key);
+        CFRelease(key);
+        if (binding && !load_binding(binding, &config->buttons[i])) return false;
+    }
+    CFTypeRef extra = CFDictionaryGetValue(dictionary, CFSTR("controls"));
+    if (!extra) return true;
+    if (CFGetTypeID(extra) != CFDictionaryGetTypeID()) return false;
+    CFIndex count = CFDictionaryGetCount(extra);
+    if (count > MX_EXTRA_BUTTON_COUNT) return false;
+    /* A device's explicit CID table replaces inherited hardware-specific CIDs. */
+    config->extra_button_count = 0;
+    const void *keys[MX_EXTRA_BUTTON_COUNT], *values[MX_EXTRA_BUTTON_COUNT];
+    CFDictionaryGetKeysAndValues(extra, keys, values);
+    uint16_t seen[MX_EXTRA_BUTTON_COUNT];
+    for (CFIndex i = 0; i < count; ++i) {
+        char text[8];
+        if (CFGetTypeID(keys[i]) != CFStringGetTypeID() ||
+            !CFStringGetCString(keys[i], text, sizeof(text), kCFStringEncodingASCII) || strlen(text) != 4) return false;
+        for (size_t j = 0; j < 4; ++j)
+            if (!((text[j] >= '0' && text[j] <= '9') || (text[j] >= 'a' && text[j] <= 'f') ||
+                  (text[j] >= 'A' && text[j] <= 'F'))) return false;
+        unsigned long cid = strtoul(text, NULL, 16);
+        if (!cid) return false;
+        for (CFIndex j = 0; j < i; ++j) if (seen[j] == cid) return false;
+        seen[i] = (uint16_t)cid;
+        size_t position = 0;
+        while (position < config->extra_button_count && config->extra_buttons[position].cid != cid) ++position;
+        if (position == config->extra_button_count) {
+            if (position == MX_EXTRA_BUTTON_COUNT) return false;
+            config->extra_buttons[position] = (MXExtraBinding){(uint16_t)cid, {MX_NATIVE, 0, 0}};
+            ++config->extra_button_count;
+        }
+        if (!load_binding(values[i], &config->extra_buttons[position].binding)) return false;
+    }
+    return true;
+}
+
+bool mx_load_device_config(MXConfig *config, const char *device_id, char *error, size_t capacity) {
     mx_defaults(config);
+    if (error && capacity) error[0] = 0;
     char path[PATH_MAX];
     if (!mx_path(path, "settings.plist")) return false;
     if (access(path, F_OK) != 0 && errno == ENOENT) return true;
     CFPropertyListRef root = mx_read_plist(path);
     bool success = root && CFGetTypeID(root) == CFDictionaryGetTypeID();
-    if (success) {
-        CFDictionaryRef dictionary = (CFDictionaryRef)root;
-        success = number(dictionary, CFSTR("dpi"), 0, 4000, &config->dpi) &&
-            number(dictionary, CFSTR("wheelMode"), 0, 3, &config->wheel_mode) &&
-            number(dictionary, CFSTR("smartShift"), 1, 50, &config->smartshift) &&
-            number(dictionary, CFSTR("verticalSpeed"), 10, 300, &config->vertical_speed) &&
-            number(dictionary, CFSTR("horizontalSpeed"), 10, 300, &config->horizontal_speed) &&
-            boolean(dictionary, CFSTR("invertVertical"), &config->invert_vertical) &&
-            boolean(dictionary, CFSTR("invertHorizontal"), &config->invert_horizontal) &&
-            boolean(dictionary, CFSTR("smooth"), &config->smooth);
-        CFTypeRef bindings = CFDictionaryGetValue(dictionary, CFSTR("buttons"));
-        if (bindings && CFGetTypeID(bindings) != CFDictionaryGetTypeID()) success = false;
-        if (success && bindings) for (size_t i = 0; i < MX_BUTTON_COUNT; ++i) {
-            CFStringRef key = CFStringCreateWithCString(NULL, mx_button_keys[i], kCFStringEncodingUTF8);
-            CFTypeRef binding = CFDictionaryGetValue(bindings, key);
-            CFRelease(key);
-            if (!binding) continue;
-            if (CFGetTypeID(binding) != CFDictionaryGetTypeID()) { success = false; break; }
-            int mode = config->buttons[i].action, code = config->buttons[i].key;
-            int modifiers = (int)config->buttons[i].modifiers;
-            if (!number(binding, CFSTR("mode"), 0, 2, &mode) ||
-                !number(binding, CFSTR("keyCode"), 0, 127, &code) ||
-                !number(binding, CFSTR("modifiers"), 0, 0x1e0000, &modifiers) ||
-                (modifiers & ~0x1e0000)) { success = false; break; }
-            config->buttons[i] = (MXBinding){(MXAction)mode, (uint16_t)code, (uint64_t)modifiers};
+    if (success) success = apply_config(root, config);
+    if (success && device_id && *device_id) {
+        CFTypeRef profiles = CFDictionaryGetValue(root, CFSTR("devices"));
+        if (profiles && CFGetTypeID(profiles) != CFDictionaryGetTypeID()) success = false;
+        if (success && profiles) {
+            CFStringRef key = CFStringCreateWithCString(NULL, device_id, kCFStringEncodingUTF8);
+            CFTypeRef profile = key ? CFDictionaryGetValue(profiles, key) : NULL;
+            if (key) CFRelease(key);
+            if (profile) success = CFGetTypeID(profile) == CFDictionaryGetTypeID() && apply_config(profile, config);
         }
     }
     if (root) CFRelease(root);
-    if (!success && error && capacity) snprintf(error, capacity, "Invalid settings.plist. Fix it in MX Mouse Settings before starting the helper.");
+    if (!success && error && capacity) snprintf(error, capacity,
+        "Invalid settings.plist%s. Fix it in MX Mouse Settings before starting mouse controls.",
+        device_id && *device_id ? " device profile" : "");
     return success;
+}
+
+bool mx_load_config(MXConfig *config, char *error, size_t capacity) {
+    return mx_load_device_config(config, NULL, error, capacity);
 }
 
 bool mx_conflicting_process(char output[256]) {
@@ -177,9 +231,7 @@ void mx_set_battery(int percent, const char *status, int charging) {
     battery_charging = charging;
 }
 
-void mx_write_status(const char *state, const char *detail, bool connected) {
-    char path[PATH_MAX];
-    if (!mx_path(path, "status.plist")) return;
+static CFMutableDictionaryRef make_status(const char *state, const char *detail, bool connected) {
     CFMutableDictionaryRef root = CFDictionaryCreateMutable(NULL, 0,
         &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
     CFStringRef value = CFStringCreateWithCString(NULL, state, kCFStringEncodingUTF8);
@@ -216,6 +268,89 @@ void mx_write_status(const char *state, const char *detail, bool connected) {
         AXIsProcessTrusted() ? kCFBooleanTrue : kCFBooleanFalse);
     CFDictionarySetValue(root, CFSTR("postEventAccess"),
         CGPreflightPostEventAccess() ? kCFBooleanTrue : kCFBooleanFalse);
+    return root;
+}
+
+void mx_write_status(const char *state, const char *detail, bool connected) {
+    char path[PATH_MAX];
+    if (!mx_path(path, "status.plist")) return;
+    CFMutableDictionaryRef root = make_status(state, detail, connected);
     mx_write_plist(path, root);
     CFRelease(root);
+}
+
+static void set_text(CFMutableDictionaryRef dictionary, CFStringRef key, const char *text) {
+    if (!text) return;
+    CFStringRef value = CFStringCreateWithCString(NULL, text, kCFStringEncodingUTF8);
+    if (value) { CFDictionarySetValue(dictionary, key, value); CFRelease(value); }
+}
+
+static void set_integer(CFMutableDictionaryRef dictionary, CFStringRef key, int value) {
+    CFNumberRef number = CFNumberCreate(NULL, kCFNumberIntType, &value);
+    CFDictionarySetValue(dictionary, key, number); CFRelease(number);
+}
+
+void mx_write_device_status(const char *state, const char *detail,
+                           const MXDeviceSnapshot *devices, size_t count) {
+    char path[PATH_MAX];
+    if (!mx_path(path, "status.plist")) return;
+    const MXDeviceSnapshot *primary = count ? &devices[0] : NULL;
+    size_t connected_count = 0;
+    for (size_t i = 0; i < count; ++i) if (devices[i].connected) {
+        if (!connected_count) primary = &devices[i];
+        ++connected_count;
+    }
+    mx_set_device_name(primary ? primary->name : NULL);
+    mx_set_battery(primary ? primary->battery_percent : -1,
+        primary ? primary->battery_status : NULL, primary ? primary->battery_charging : -1);
+    CFMutableDictionaryRef root = make_status(state, detail, connected_count != 0);
+    set_integer(root, CFSTR("connectedCount"), (int)connected_count);
+    CFMutableArrayRef list = CFArrayCreateMutable(NULL, (CFIndex)count, &kCFTypeArrayCallBacks);
+    for (size_t i = 0; i < count; ++i) {
+        const MXDeviceSnapshot *device = &devices[i];
+        CFMutableDictionaryRef entry = CFDictionaryCreateMutable(NULL, 0,
+            &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        set_text(entry, CFSTR("id"), device->id);
+        set_text(entry, CFSTR("name"), device->name);
+        set_text(entry, CFSTR("transport"), device->transport);
+        set_text(entry, CFSTR("state"), device->state);
+        set_text(entry, CFSTR("detail"), device->detail);
+        CFDictionarySetValue(entry, CFSTR("connected"), device->connected ? kCFBooleanTrue : kCFBooleanFalse);
+        if (device->connected) {
+            if (device->battery_percent >= 0 && device->battery_percent <= 100)
+                set_integer(entry, CFSTR("batteryPercent"), device->battery_percent);
+            set_text(entry, CFSTR("batteryStatus"), device->battery_status);
+            if (device->battery_charging == 0 || device->battery_charging == 1)
+                CFDictionarySetValue(entry, CFSTR("batteryCharging"), device->battery_charging ? kCFBooleanTrue : kCFBooleanFalse);
+        }
+        CFMutableDictionaryRef capabilities = CFDictionaryCreateMutable(NULL, 0,
+            &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        const CFStringRef names[] = {CFSTR("buttons"), CFSTR("verticalScroll"), CFSTR("horizontalScroll"),
+            CFSTR("dpi"), CFSTR("wheelMode"), CFSTR("smartShift"), CFSTR("battery"), CFSTR("haptic")};
+        const uint32_t bits[] = {MX_CAP_BUTTONS, MX_CAP_HIRES_SCROLL, MX_CAP_THUMBWHEEL, MX_CAP_DPI,
+            MX_CAP_SMARTSHIFT, MX_CAP_SMARTSHIFT, MX_CAP_BATTERY, MX_CAP_HAPTIC};
+        for (size_t j = 0; j < sizeof(bits) / sizeof(bits[0]); ++j)
+            CFDictionarySetValue(capabilities, names[j], device->capabilities & bits[j] ? kCFBooleanTrue : kCFBooleanFalse);
+        CFDictionarySetValue(entry, CFSTR("capabilities"), capabilities); CFRelease(capabilities);
+        CFMutableArrayRef controls = CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
+        for (size_t j = 0; j < device->control_count && j < MX_CONTROL_MAX; ++j) {
+            const MXControl *control = &device->controls[j];
+            CFMutableDictionaryRef row = CFDictionaryCreateMutable(NULL, 0,
+                &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+            set_integer(row, CFSTR("cid"), control->cid);
+            set_integer(row, CFSTR("slot"), control->slot);
+            const char *name = mx_control_name(control->cid);
+            char fallback[32];
+            snprintf(fallback, sizeof(fallback), "Button %04x", control->cid);
+            set_text(row, CFSTR("name"), name ? name : fallback);
+            CFDictionarySetValue(row, CFSTR("divertible"), control->divertible ? kCFBooleanTrue : kCFBooleanFalse);
+            CFArrayAppendValue(controls, row); CFRelease(row);
+        }
+        CFDictionarySetValue(entry, CFSTR("controls"), controls); CFRelease(controls);
+        CFArrayAppendValue(list, entry); CFRelease(entry);
+    }
+    CFDictionarySetValue(root, CFSTR("devices"), list); CFRelease(list);
+    mx_write_plist(path, root); CFRelease(root);
+    mx_set_device_name(NULL);
+    mx_set_battery(-1, NULL, -1);
 }

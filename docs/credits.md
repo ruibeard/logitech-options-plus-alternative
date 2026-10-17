@@ -2,11 +2,11 @@
 
 ## Publishing and contributing
 
-This is an independent, experimental project and is not affiliated with Logitech. Only MX Master 3 for Mac over direct Bluetooth is implemented; full Options+ compatibility is not claimed.
+This is an independent, experimental project and is not affiliated with Logitech. The helper discovers compatible Logitech HID++ mice and their capabilities; full Options+ compatibility and untested model/transport combinations are not claimed.
 
-Before a public GitHub release, choose a source-code license and review redistribution rights for the extracted Logitech artwork. No license has been selected in this repository; attribution alone does not grant permission to redistribute third-party assets. Replace that artwork with original assets if needed. Do not upload signing certificates, private keys, local Options+ databases, or personal settings/logs. The generated `build/` directory is ignored.
+The project source is distributed under the [MIT license](../LICENSE). Third-party artwork sources are listed below separately from the code license. Signing certificates, private keys, local Options+ databases, personal settings and logs are excluded from releases. The generated `build/` directory is ignored.
 
-For downloadable releases, use a deliberate release signing identity and a macOS notarization/distribution process; the current script creates a locally signed development build, not a notarized release. Contributors can use their own signing certificate or explicitly opt into ad-hoc signing as described above.
+Downloadable prereleases are explicitly marked as development-signed and not notarized. The build script reuses the configured signing identity and verifies both app bundles; it does not perform notarization. Contributors can use their own signing certificate or explicitly opt into ad-hoc signing as described above.
 
 Useful contributions include hardware test reports, verified device definitions, protocol fixes, and small native UI improvements. Include reproduction steps and the exact model/transport. Keep the low resident-memory design: no background web UI, unnecessary timers, or dependencies for settings-only features.
 
@@ -14,7 +14,16 @@ Useful contributions include hardware test reports, verified device definitions,
 
 The resident helper links CoreFoundation, CoreGraphics, ApplicationServices, IOKit, and libSystem. It derives HID++ output-report lengths from the descriptor, resolves feature indices on connection, and opens the device without seizing it. Device removal and power notifications trigger cleanup or reapplication; these paths still need hardware verification. The model registry lives in `src/device.c`.
 
-Protocol references: [Solaar](https://github.com/pwr-Solaar/Solaar), [OpenLogi HID++ implementations](https://github.com/AprilNEA/OpenLogi/tree/v0.8.3/crates/openlogi-hidpp/src/feature), and [RaTamer protocol notes](https://github.com/gilsonolegario/RaTamer/blob/main/docs/HIDPP.md). This project does not vendor their implementations.
+Protocol references used for the capability and receiver work:
+
+- [OpenLogi receiver registry](https://github.com/AprilNEA/OpenLogi/blob/42af6f4/crates/openlogi-device-registry/src/receiver.rs): grounded Bolt, Unifying, Nano and Lightspeed identities and their protocol families.
+- [OpenLogi reprogrammable controls](https://github.com/AprilNEA/OpenLogi/blob/42af6f4/crates/openlogi-device/src/reprog_controls.rs) and its [typed wire implementation](https://github.com/AprilNEA/OpenLogi/blob/42af6f4/crates/openlogi-hidpp/src/feature/reprog_controls.rs): control-info layouts, capability flags and alternate button IDs, including MX Master 4 Haptic panel CID `01a0`.
+- [OpenLogi Bolt receiver](https://github.com/AprilNEA/OpenLogi/blob/42af6f4/crates/openlogi-hidpp/src/receiver/bolt.rs), [device identity](https://github.com/AprilNEA/OpenLogi/blob/42af6f4/crates/openlogi-hidpp/src/feature/device_information.rs), [marketing type/name](https://github.com/AprilNEA/OpenLogi/blob/42af6f4/crates/openlogi-hidpp/src/feature/device_type_and_name.rs), and [feature probing](https://github.com/AprilNEA/OpenLogi/blob/42af6f4/crates/openlogi-device/src/inventory/features.rs): pairing offsets, per-unit identity and older feature differences.
+- [OpenLogi reviewed fixtures](https://github.com/AprilNEA/OpenLogi/tree/42af6f4/fixtures/devices): reference captures for MX Master 3S and MX Master 4. Upstream hardware captures are not this project's hardware verification.
+- [Solaar device descriptors](https://github.com/pwr-Solaar/Solaar/blob/master/lib/logitech_receiver/descriptors.py) and [special control IDs](https://github.com/pwr-Solaar/Solaar/blob/master/lib/logitech_receiver/special_keys.py): model identities, the distinct HID++ generations of M705, and classic/alternate control IDs.
+- [RaTamer protocol notes](https://github.com/gilsonolegario/RaTamer/blob/main/docs/HIDPP.md): earlier HID++ reference material.
+
+These are protocol references; this repository does not vendor their implementations or fixture collections. The C parsers and tests encode the relevant wire formats and malformed-input cases.
 
 The mouse illustration in `assets/mx-master-3.png` is a lossless conversion of Logitech’s `mx_master_3/side_ext_3.webp` from the installed Options+ device depot. Connector positions come from Logitech’s `core_metadata.json`. The native app icons are generated by `scripts/icon.m`. Only the image used by the app is retained in this repository.
 

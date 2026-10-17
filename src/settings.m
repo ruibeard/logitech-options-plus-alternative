@@ -130,6 +130,7 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
 @property NSArray<NSValue *> *anchors;
 @property NSArray<NSValue *> *ends;
 @property BOOL compactMouse;
+@property NSIndexSet *visibleControls;
 @end
 @implementation MXDiagram
 - (NSView *)hitTest:(NSPoint)point { (void)point; return nil; }
@@ -137,6 +138,7 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
     (void)rect;
     NSColor *ink = [NSColor.secondaryLabelColor colorWithAlphaComponent:0.48];
     for (NSUInteger i = 0; i < self.anchors.count; ++i) {
+        if (self.visibleControls && ![self.visibleControls containsIndex:i]) continue;
         if (self.compactMouse && i >= 4) continue;
         NSPoint point = self.anchors[i].pointValue, start = self.ends[i].pointValue;
         if(self.compactMouse) {
@@ -154,7 +156,7 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
 }
 @end
 
-@interface SettingsDelegate : NSObject <NSApplicationDelegate>
+@interface SettingsDelegate : NSObject <NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate>
 @property NSWindow *window;
 @property NSTextField *deviceTitle;
 @property NSTextField *deviceSubtitle;
@@ -164,6 +166,22 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
 @property MXDiagram *diagramLines;
 @property NSMutableArray<NSView *> *masterOnlyViews;
 @property BOOL compactMouse;
+@property BOOL genericMouse;
+@property NSPopUpButton *deviceSelector;
+@property NSPopUpButton *controlSelector;
+@property NSTableView *controlTable;
+@property NSScrollView *controlList;
+@property NSView *buttonEditor;
+@property NSTextField *genericHint;
+@property NSArray<NSDictionary *> *devices;
+@property NSDictionary *selectedDevice;
+@property NSString *selectedDeviceID;
+@property NSArray<NSDictionary *> *availableControls;
+@property NSDictionary *capabilities;
+@property NSMutableArray<NSView *> *wheelViews;
+@property NSMutableArray<NSView *> *horizontalViews;
+@property NSMutableArray<NSView *> *verticalViews;
+@property NSMutableArray<NSView *> *dpiViews;
 @property NSTextField *statusLabel;
 @property NSMutableArray<NSPopUpButton *> *modes;
 @property NSMutableArray<MXRecorder *> *recorders;
@@ -255,6 +273,10 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
     self.batteryLabel.frame=NSMakeRect(484,679,145,24);
     self.batteryLabel.hidden=YES; [root addSubview:self.batteryLabel];
     self.masterOnlyViews=[NSMutableArray new];
+    self.wheelViews=[NSMutableArray new]; self.horizontalViews=[NSMutableArray new]; self.verticalViews=[NSMutableArray new]; self.dpiViews=[NSMutableArray new];
+    self.deviceSelector=[[NSPopUpButton alloc] initWithFrame:NSMakeRect(270,613,412,28) pullsDown:NO];
+    self.deviceSelector.target=self; self.deviceSelector.action=@selector(deviceChanged:);
+    self.deviceSelector.hidden=YES; [root addSubview:self.deviceSelector];
     subtitle.textColor = NSColor.secondaryLabelColor; subtitle.frame = NSMakeRect(34, 654, 400, 18); [root addSubview:subtitle];
     self.importOptionsButton=[self button:@"Import from Options+…" action:@selector(importOptions:)];
     self.importOptionsButton.frame=NSMakeRect(30,610,211,32); [root addSubview:self.importOptionsButton];
@@ -272,6 +294,20 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
     self.modes = [NSMutableArray new]; self.recorders = [NSMutableArray new]; self.buttonPanes = [NSMutableArray new];
     NSBox *divider = [[NSBox alloc] initWithFrame:NSMakeRect(703, 191, 1, 390)]; divider.boxType = NSBoxSeparator; [root addSubview:divider];
     NSView *buttonEditor = [[NSView alloc] initWithFrame:NSMakeRect(731, 490, 240, 120)]; [root addSubview:buttonEditor];
+    self.buttonEditor=buttonEditor;
+    self.controlSelector=[[NSPopUpButton alloc] initWithFrame:NSMakeRect(60,526,580,32) pullsDown:NO];
+    self.controlSelector.target=self; self.controlSelector.action=@selector(controlChanged:);
+    self.controlSelector.hidden=YES;
+    self.controlList=[[NSScrollView alloc] initWithFrame:NSMakeRect(60,228,600,330)];
+    self.controlList.drawsBackground=NO; self.controlList.hasVerticalScroller=YES;
+    self.controlTable=[[NSTableView alloc] initWithFrame:self.controlList.bounds];
+    self.controlTable.backgroundColor=NSColor.clearColor; self.controlTable.rowHeight=42;
+    self.controlTable.intercellSpacing=NSMakeSize(10,0); self.controlTable.dataSource=self; self.controlTable.delegate=self;
+    NSTableColumn *controlColumn=[[NSTableColumn alloc] initWithIdentifier:@"name"]; controlColumn.title=@"Control"; controlColumn.width=285; [self.controlTable addTableColumn:controlColumn];
+    NSTableColumn *actionColumn=[[NSTableColumn alloc] initWithIdentifier:@"action"]; actionColumn.title=@"Action"; actionColumn.width=285; [self.controlTable addTableColumn:actionColumn];
+    self.controlList.documentView=self.controlTable; self.controlList.hidden=YES; [root addSubview:self.controlList];
+    self.genericHint=[NSTextField wrappingLabelWithString:@"Select a control to customize its action. Controls are discovered from this mouse."];
+    self.genericHint.frame=NSMakeRect(64,176,590,40); self.genericHint.textColor=NSColor.secondaryLabelColor; self.genericHint.hidden=YES; [root addSubview:self.genericHint];
     self.selectionTitle = [self label:@"Thumb button" size:21 weight:NSFontWeightSemibold]; self.selectionTitle.frame = NSMakeRect(0,94,240,26); [buttonEditor addSubview:self.selectionTitle];
     __weak SettingsDelegate *layoutSelf = self;
     for (NSUInteger i=0; i<MX_BUTTON_COUNT; ++i) {
@@ -281,7 +317,15 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
         [mode addItemsWithTitles:@[@"Mouse default", @"Keyboard shortcut", @"Do nothing"]]; mode.tag=(NSInteger)i; mode.target=self; mode.action=@selector(modeChanged:); [pane addSubview:mode]; [self.modes addObject:mode];
         MXRecorder *recorder=[MXRecorder new]; recorder.frame=NSMakeRect(0,4,232,36); recorder.didChange=^{ [layoutSelf updateCallouts]; [layoutSelf settingsChanged:nil]; }; [pane addSubview:recorder]; [self.recorders addObject:recorder];
     }
-    MXCallout *thumbWheel=[[MXCallout alloc] initWithFrame:NSMakeRect(405,173,206,72)]; thumbWheel.title=@"Horizontal scroll\nThumb wheel"; thumbWheel.bordered=NO; thumbWheel.target=self; thumbWheel.action=@selector(showScroll:); [diagram addSubview:thumbWheel]; [self.callouts addObject:thumbWheel]; [self.masterOnlyViews addObject:thumbWheel];
+    // Additional HID++ controls share the same editor, without adding a fixed model layout.
+    for(NSUInteger i=MX_BUTTON_COUNT;i<MX_BUTTON_COUNT+MX_EXTRA_BUTTON_COUNT;++i) {
+        NSView *pane=[[NSView alloc] initWithFrame:NSMakeRect(0,0,240,88)]; pane.hidden=YES; [buttonEditor addSubview:pane]; [self.buttonPanes addObject:pane];
+        NSPopUpButton *mode=[[NSPopUpButton alloc] initWithFrame:NSMakeRect(0,46,232,30) pullsDown:NO];
+        [mode addItemsWithTitles:@[@"Mouse default",@"Keyboard shortcut",@"Do nothing"]]; mode.tag=(NSInteger)i; mode.target=self; mode.action=@selector(modeChanged:); [pane addSubview:mode]; [self.modes addObject:mode];
+        MXRecorder *recorder=[MXRecorder new]; recorder.frame=NSMakeRect(0,4,232,36);
+        recorder.didChange=^{ [layoutSelf updateCallouts]; [layoutSelf settingsChanged:nil]; }; [pane addSubview:recorder]; [self.recorders addObject:recorder];
+    }
+    MXCallout *thumbWheel=[[MXCallout alloc] initWithFrame:NSMakeRect(405,173,206,72)]; thumbWheel.title=@"Horizontal scroll\nThumb wheel"; thumbWheel.bordered=NO; thumbWheel.target=self; thumbWheel.action=@selector(showScroll:); [diagram addSubview:thumbWheel]; [self.callouts addObject:thumbWheel]; [self.masterOnlyViews addObject:thumbWheel]; [self.horizontalViews addObject:thumbWheel];
     /* Logitech core_metadata.json marker percentages, mapped into the image frame. */
     arrows.anchors=@[[NSValue valueWithPoint:NSMakePoint(396.1,375.5)], [NSValue valueWithPoint:NSMakePoint(326.65,182)], [NSValue valueWithPoint:NSMakePoint(299.14,255.1)], [NSValue valueWithPoint:NSMakePoint(227.84,190.6)], [NSValue valueWithPoint:NSMakePoint(422.39,293.8)], [NSValue valueWithPoint:NSMakePoint(353.36,218.55)]];
     arrows.ends=@[[NSValue valueWithPoint:NSMakePoint(438,376)], [NSValue valueWithPoint:NSMakePoint(338,141)], [NSValue valueWithPoint:NSMakePoint(256,264)], [NSValue valueWithPoint:NSMakePoint(205,190)], [NSValue valueWithPoint:NSMakePoint(458,294)], [NSValue valueWithPoint:NSMakePoint(411,209)]];
@@ -290,7 +334,7 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
     self.wheelMode=[[NSPopUpButton alloc] initWithFrame:NSMakeRect(0,208,235,28) pullsDown:NO]; [self.wheelMode addItemsWithTitles:@[@"Leave unchanged", @"Ratchet", @"Free spin", @"SmartShift"]]; [scrollEditor addSubview:self.wheelMode];
     NSArray *sectionNames=@[@"Wheel mode", @"Main wheel speed", @"Thumb wheel speed", @"Pointer speed"];
     CGFloat sectionY[]={235,180,111,40};
-    for(NSUInteger i=0;i<4;++i) { NSTextField *l=[self label:sectionNames[i] size:12 weight:NSFontWeightSemibold]; l.frame=NSMakeRect(0,sectionY[i],235,19); [scrollEditor addSubview:l]; if(i!=1) [self.masterOnlyViews addObject:l]; }
+    for(NSUInteger i=0;i<4;++i) { NSTextField *l=[self label:sectionNames[i] size:12 weight:NSFontWeightSemibold]; l.frame=NSMakeRect(0,sectionY[i],235,19); [scrollEditor addSubview:l]; if(i!=1) [self.masterOnlyViews addObject:l]; if(i==0) [self.wheelViews addObject:l]; if(i==1) [self.verticalViews addObject:l]; if(i==2) [self.horizontalViews addObject:l]; if(i==3) [self.dpiViews addObject:l]; }
     self.verticalSpeed=[NSSlider sliderWithValue:100 minValue:10 maxValue:300 target:self action:@selector(speedChanged:)]; self.verticalSpeed.frame=NSMakeRect(0,157,177,22); [scrollEditor addSubview:self.verticalSpeed];
     self.horizontalSpeed=[NSSlider sliderWithValue:100 minValue:10 maxValue:300 target:self action:@selector(speedChanged:)]; self.horizontalSpeed.frame=NSMakeRect(0,88,177,22); [scrollEditor addSubview:self.horizontalSpeed];
     self.verticalValue=[self label:@"100%" size:12 weight:NSFontWeightRegular]; self.verticalValue.frame=NSMakeRect(184,157,54,22); [scrollEditor addSubview:self.verticalValue];
@@ -300,6 +344,9 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
     self.smooth=[NSButton checkboxWithTitle:@"Smooth scroll" target:nil action:nil]; self.smooth.frame=NSMakeRect(110,135,130,22); [scrollEditor addSubview:self.smooth];
     self.dpi=[[NSPopUpButton alloc] initWithFrame:NSMakeRect(0,10,235,28) pullsDown:NO]; [self.dpi addItemsWithTitles:@[@"Leave unchanged", @"400 DPI", @"800 DPI", @"1000 DPI", @"1600 DPI", @"2000 DPI", @"3200 DPI", @"4000 DPI"]]; [scrollEditor addSubview:self.dpi];
     [self.masterOnlyViews addObjectsFromArray:@[self.wheelMode,self.horizontalSpeed,self.horizontalValue,self.invertHorizontal,self.dpi]];
+    [self.wheelViews addObject:self.wheelMode]; [self.dpiViews addObject:self.dpi];
+    [self.horizontalViews addObjectsFromArray:@[self.horizontalSpeed,self.horizontalValue,self.invertHorizontal]];
+    [self.verticalViews addObjectsFromArray:@[self.verticalSpeed,self.verticalValue,self.invertVertical,self.smooth]];
     NSBox *footerLine=[[NSBox alloc] initWithFrame:NSMakeRect(32,155,936,1)]; footerLine.boxType=NSBoxSeparator; [root addSubview:footerLine];
     self.statusLabel=[NSTextField wrappingLabelWithString:@"Helper stopped."]; self.statusLabel.font=[NSFont systemFontOfSize:12]; self.statusLabel.frame=NSMakeRect(34,110,710,34); [root addSubview:self.statusLabel];
     self.loginService=[SMAppService loginItemServiceWithIdentifier:@"local.mxmouse.helper"];
@@ -362,23 +409,131 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
         return event;
     }];
 }
-- (void)updateDevice:(NSDictionary *)status {
-    NSString *name=[status[@"deviceName"] isKindOfClass:NSString.class] ? status[@"deviceName"] : @"";
-    BOOL compact=[name isEqualToString:@"Logitech M705"];
-    self.deviceTitle.stringValue=compact ? name : @"MX Master 3";
-    self.deviceSubtitle.stringValue=compact ? @"UNIFYING RECEIVER" : @"FOR MAC  /  BLUETOOTH";
-    if(self.compactMouse==compact) return;
-    self.compactMouse=compact;
+- (void)deviceChanged:(NSPopUpButton *)sender {
+    [self cancelRecording]; [self applyPendingSettings];
+    NSInteger index=sender.indexOfSelectedItem;
+    if(index>=0 && (NSUInteger)index<self.devices.count) {
+        self.selectedDeviceID=self.devices[(NSUInteger)index][@"id"];
+        self.selectedDevice=nil;
+        [self refresh:nil];
+    }
+}
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
+    (void)tableView; return (NSInteger)self.availableControls.count;
+}
+- (id)tableView:(NSTableView *)tableView objectValueForTableColumn:(NSTableColumn *)column row:(NSInteger)row {
+    (void)tableView;
+    NSDictionary *control=self.availableControls[(NSUInteger)row];
+    if([column.identifier isEqualToString:@"name"]) return control[@"name"] ?: @"Mouse control";
+    NSUInteger slot=[control[@"slot"] unsignedIntegerValue];
+    NSInteger mode=self.modes[slot].indexOfSelectedItem;
+    return mode==MX_SHORTCUT ? shortcutLabel(self.recorders[slot].keyCode,self.recorders[slot].shortcutModifiers) : mode==MX_DISABLED ? @"Do nothing" : @"Mouse default";
+}
+- (void)tableViewSelectionDidChange:(NSNotification *)notification {
+    (void)notification;
+    NSInteger row=self.controlTable.selectedRow;
+    if(row<0 || (NSUInteger)row>=self.availableControls.count) return;
+    NSInteger slot=[self.availableControls[(NSUInteger)row][@"slot"] integerValue];
+    if(slot==self.selectedButton) return;
+    [self cancelRecording]; self.selectedButton=slot; [self updateCallouts];
+}
+- (void)controlChanged:(NSPopUpButton *)sender {
     [self cancelRecording];
-    self.mouseView.frame=compact ? NSMakeRect(155,50,400,350) : NSMakeRect(205,10,270,430);
-    self.mouseView.compactMouse=compact;
-    self.mouseView.needsDisplay=YES;
-    self.diagramLines.compactMouse=compact;
-    self.diagramLines.needsDisplay=YES;
-    for(NSView *view in self.masterOnlyViews) view.hidden=compact;
-    self.callouts[4].hidden=compact;
-    if(compact && self.selectedButton==4) self.selectedButton=3;
+    NSNumber *slot=sender.selectedItem.representedObject;
+    if(slot) self.selectedButton=slot.integerValue;
     [self updateCallouts];
+}
+- (BOOL)hasCapability:(NSString *)name {
+    return [self.capabilities[name] boolValue];
+}
+- (NSDictionary *)controlForSlot:(NSUInteger)slot {
+    for(NSDictionary *control in self.availableControls) if([control[@"slot"] unsignedIntegerValue]==slot) return control;
+    return nil;
+}
+- (NSDictionary *)updateDevice:(NSDictionary *)status {
+    NSArray *entries=[status[@"devices"] isKindOfClass:NSArray.class] ? status[@"devices"] : @[];
+    self.devices=entries;
+    NSDictionary *device=nil;
+    for(NSDictionary *candidate in entries) if([candidate[@"id"] isEqual:self.selectedDeviceID]) { device=candidate; break; }
+    if(!device) for(NSDictionary *candidate in entries) if([candidate[@"connected"] boolValue]) { device=candidate; break; }
+    if(!device) device=entries.firstObject;
+    BOOL changed=![self.selectedDeviceID ?: @"" isEqual:device[@"id"] ?: @""] || !self.selectedDevice;
+    self.selectedDeviceID=[device[@"id"] isKindOfClass:NSString.class] ? device[@"id"] : nil;
+    self.selectedDevice=device;
+    [self.deviceSelector removeAllItems];
+    NSUInteger selection=0;
+    for(NSUInteger i=0;i<entries.count;++i) {
+        NSDictionary *candidate=entries[i];
+        NSString *title=[candidate[@"name"] isKindOfClass:NSString.class] ? candidate[@"name"] : @"Logitech mouse";
+        // Add a short identity so two identical models can still be distinguished.
+        NSString *identity=[candidate[@"id"] isKindOfClass:NSString.class] ? candidate[@"id"] : @"";
+        if(identity.length>8) identity=[identity substringFromIndex:identity.length-8];
+        [self.deviceSelector addItemWithTitle:[NSString stringWithFormat:@"%@ · %@%@",title,identity,[candidate[@"connected"] boolValue] ? @"" : @" · Offline"]];
+        if(candidate==device) selection=i;
+    }
+    if(entries.count) [self.deviceSelector selectItemAtIndex:selection];
+    self.deviceSelector.hidden=entries.count<2;
+    NSDictionary *active=device ?: status;
+    NSString *name=[active[@"name"] isKindOfClass:NSString.class] ? active[@"name"] : active[@"deviceName"];
+    if(![name isKindOfClass:NSString.class] || !name.length) name=@"Logitech mouse";
+    self.deviceTitle.stringValue=name;
+    NSString *transport=[device[@"transport"] isKindOfClass:NSString.class] ? [device[@"transport"] uppercaseString] : @"";
+    self.deviceSubtitle.stringValue=device ? ([device[@"connected"] boolValue] ? (transport.length ? [NSString stringWithFormat:@"CONNECTED  /  %@",transport] : @"CONNECTED  /  DEVICE SETTINGS") : @"OFFLINE  /  SAVED SETTINGS") : @"CONNECT A LOGITECH MOUSE";
+    BOOL compact=[name rangeOfString:@"M705" options:NSCaseInsensitiveSearch].location!=NSNotFound;
+    BOOL master3=[name rangeOfString:@"Master 3" options:NSCaseInsensitiveSearch].location!=NSNotFound;
+    self.compactMouse=compact;
+    self.genericMouse=!compact && !master3;
+    self.capabilities=[active[@"capabilities"] isKindOfClass:NSDictionary.class] ? active[@"capabilities"] : @{};
+    NSArray *controls=[active[@"controls"] isKindOfClass:NSArray.class] ? active[@"controls"] : @[];
+    NSMutableArray *editable=[NSMutableArray new];
+    NSUInteger extraSlot=MX_BUTTON_COUNT;
+    NSMutableIndexSet *usedSlots=[NSMutableIndexSet new];
+    NSMutableSet *seenCIDs=[NSMutableSet new];
+    for(NSDictionary *control in controls) {
+        if(![control[@"divertible"] boolValue] || ![control[@"cid"] isKindOfClass:NSNumber.class]) continue;
+        if([seenCIDs containsObject:control[@"cid"]]) continue;
+        [seenCIDs addObject:control[@"cid"]];
+        NSInteger slot=[control[@"slot"] isKindOfClass:NSNumber.class] ? [control[@"slot"] integerValue] : -1;
+        if(slot<0 || slot>=MX_BUTTON_COUNT || [usedSlots containsIndex:(NSUInteger)slot]) {
+            if(extraSlot>=self.modes.count) continue;
+            NSMutableDictionary *extra=[control mutableCopy]; extra[@"bindingSlot"]=@(slot); extra[@"slot"]=@(extraSlot++); [editable addObject:extra];
+        } else { [usedSlots addIndex:(NSUInteger)slot]; [editable addObject:control]; }
+    }
+    changed=changed || ![self.availableControls isEqualToArray:editable];
+    self.availableControls=editable;
+    if(extraSlot>MX_BUTTON_COUNT) self.genericMouse=YES;
+    self.mouseView.hidden=self.diagramLines.hidden=self.genericMouse;
+    self.mouseView.frame=compact ? NSMakeRect(155,50,400,350) : NSMakeRect(205,10,270,430);
+    self.mouseView.compactMouse=compact; self.mouseView.needsDisplay=YES;
+    self.diagramLines.compactMouse=compact;
+    NSMutableIndexSet *visible=[NSMutableIndexSet new];
+    for(NSUInteger i=0;i<MX_BUTTON_COUNT;++i) {
+        BOOL present=[self controlForSlot:i]!=nil;
+        self.callouts[i].hidden=self.genericMouse || !present;
+        if(present) [visible addIndex:i];
+    }
+    if([self hasCapability:@"horizontalScroll"]) [visible addIndex:5];
+    self.diagramLines.visibleControls=visible; self.diagramLines.needsDisplay=YES;
+    for(NSView *view in self.wheelViews) view.hidden=![self hasCapability:@"wheelMode"];
+    [self.wheelMode itemAtIndex:3].enabled=[self hasCapability:@"smartShift"];
+    for(NSView *view in self.dpiViews) view.hidden=![self hasCapability:@"dpi"];
+    for(NSView *view in self.horizontalViews) view.hidden=![self hasCapability:@"horizontalScroll"];
+    for(NSView *view in self.verticalViews) view.hidden=![self hasCapability:@"verticalScroll"];
+    self.callouts[5].hidden=self.genericMouse || ![self hasCapability:@"horizontalScroll"];
+    [self.controlSelector removeAllItems];
+    for(NSDictionary *control in editable) {
+        NSString *controlName=[control[@"name"] isKindOfClass:NSString.class] ? control[@"name"] : [NSString stringWithFormat:@"Control %@",control[@"cid"]];
+        [self.controlSelector addItemWithTitle:controlName]; self.controlSelector.lastItem.representedObject=control[@"slot"];
+    }
+    self.controlSelector.hidden=YES;
+    self.controlList.hidden=!self.genericMouse;
+    self.controlSelector.enabled=editable.count>0;
+    self.genericHint.hidden=!self.genericMouse;
+    self.genericHint.stringValue=editable.count ? @"Select a control to customize its action. Controls are discovered from this mouse." : @"No customizable controls reported yet. The mouse may be asleep or still connecting.";
+    if(![self controlForSlot:(NSUInteger)self.selectedButton]) self.selectedButton=editable.count ? [editable.firstObject[@"slot"] integerValue] : -1;
+    if(changed) { [self cancelRecording]; [self load]; }
+    [self updateCallouts];
+    return active;
 }
 - (void)updateCallouts {
     NSArray *names=@[@"Middle button", @"Back", @"Forward", @"Thumb button", @"Top button"];
@@ -400,9 +555,17 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
         self.callouts[i].accessibilityLabel=[self.callouts[i].title stringByReplacingOccurrencesOfString:@"\n" withString:@", "];
         self.callouts[i].selected=(NSInteger)i==self.selectedButton;
         self.callouts[i].needsDisplay=YES;
-        self.buttonPanes[i].hidden=(NSInteger)i!=self.selectedButton;
+
     }
-    self.selectionTitle.stringValue=names[(NSUInteger)self.selectedButton];
+    for(NSUInteger i=0;i<self.buttonPanes.count;++i) self.buttonPanes[i].hidden=(NSInteger)i!=self.selectedButton || ![self controlForSlot:i];
+    NSDictionary *selected=self.selectedButton>=0 ? [self controlForSlot:(NSUInteger)self.selectedButton] : nil;
+    self.selectionTitle.stringValue=selected[@"name"] ?: @"Mouse controls";
+    [self.controlTable reloadData];
+    for(NSUInteger row=0;row<self.availableControls.count;++row) if([self.availableControls[row][@"slot"] integerValue]==self.selectedButton) {
+        if(self.controlTable.selectedRow!=(NSInteger)row) [self.controlTable selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO];
+        break;
+    }
+    for(NSMenuItem *item in self.controlSelector.itemArray) if([item.representedObject integerValue]==self.selectedButton) { [self.controlSelector selectItem:item]; break; }
 }
 - (void)cancelRecording {
     for (MXRecorder *recorder in self.recorders) if (recorder.recording) {
@@ -427,14 +590,36 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
 - (NSURL *)helperURL {
     return [NSBundle.mainBundle.bundleURL URLByAppendingPathComponent:@"Contents/Library/LoginItems/MX Mouse Helper.app"];
 }
+- (BOOL)canImportOptions {
+    NSString *name=self.selectedDevice[@"name"];
+    return self.selectedDeviceID.length && [name isKindOfClass:NSString.class] &&
+        [name rangeOfString:@"Master 3" options:NSCaseInsensitiveSearch].location!=NSNotFound &&
+        [name rangeOfString:@"Master 3S" options:NSCaseInsensitiveSearch].location==NSNotFound;
+}
+- (NSDictionary *)settingsByImportingProfile:(NSDictionary *)imported intoSettings:(NSDictionary *)current {
+    NSMutableDictionary *result=[current mutableCopy];
+    NSMutableDictionary *profiles=[current[@"devices"] isKindOfClass:NSDictionary.class] ? [current[@"devices"] mutableCopy] : [NSMutableDictionary new];
+    NSMutableDictionary *profile=[imported mutableCopy]; [profile removeObjectForKey:@"devices"];
+    // The importer writes legacy logical buttons; remove stale CID overrides for those controls.
+    NSMutableDictionary *overrides=[profile[@"controls"] isKindOfClass:NSDictionary.class] ? [profile[@"controls"] mutableCopy] : [NSMutableDictionary new];
+    for(NSDictionary *control in self.availableControls) if([control[@"slot"] integerValue]<MX_BUTTON_COUNT)
+        [overrides removeObjectForKey:[NSString stringWithFormat:@"%04x",[control[@"cid"] unsignedShortValue]]];
+    profile[@"controls"]=overrides; profiles[self.selectedDeviceID]=profile; result[@"devices"]=profiles;
+    return result;
+}
 - (void)importOptions:(id)sender {
-    (void)sender; [self cancelRecording]; [self applyPendingSettings];
+    (void)sender;
+    if(![self canImportOptions]) return;
+    [self cancelRecording]; [self applyPendingSettings];
     NSDictionary *current=readDictionary(supportPath(@"settings.plist"));
     NSError *error=nil;
     NSString *database=[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/LogiOptionsPlus/settings.db"];
-    NSDictionary *result=MXReadOptionsImport(database,current,&error);
+    NSMutableDictionary *effective=[current mutableCopy]; [effective removeObjectForKey:@"devices"];
+    NSDictionary *profile=[current[@"devices"] isKindOfClass:NSDictionary.class] ? current[@"devices"][self.selectedDeviceID] : nil;
+    if([profile isKindOfClass:NSDictionary.class]) [effective addEntriesFromDictionary:profile];
+    NSDictionary *result=MXReadOptionsImport(database,effective,&error);
     if(!result) { [self alert:error.localizedDescription ?: @"Could not read Options+ settings."]; return; }
-    NSDictionary *settings=result[@"settings"];
+    NSDictionary *settings=[self settingsByImportingProfile:result[@"settings"] intoSettings:current];
     NSString *path=supportPath(@"settings.plist");
     NSString *backup=supportPath(@"settings.before-options-import.plist");
     if(!path || !backup || !mx_write_plist(backup.fileSystemRepresentation,(__bridge CFDictionaryRef)current) ||
@@ -450,17 +635,25 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
 - (void)load {
     self.loadingSettings=YES;
     MXConfig config; char error[256] = {0};
-    if (!mx_load_config(&config, error, sizeof(error))) {
+    if (!mx_load_device_config(&config, self.selectedDeviceID.UTF8String, error, sizeof(error))) {
         mx_defaults(&config); [self alert:@(error)];
     }
-    for (NSUInteger i = 0; i < MX_BUTTON_COUNT; ++i) {
-        [self.modes[i] selectItemAtIndex:config.buttons[i].action];
-        self.recorders[i].keyCode = config.buttons[i].key;
-        self.recorders[i].shortcutModifiers = config.buttons[i].modifiers;
+    for (NSUInteger i=0;i<self.modes.count;++i) {
+        NSDictionary *control=[self controlForSlot:i];
+        MXBinding binding=i<MX_BUTTON_COUNT ? config.buttons[i] : (MXBinding){0};
+        if(control) {
+            int slot=control[@"bindingSlot"] ? [control[@"bindingSlot"] intValue] : i<MX_BUTTON_COUNT ? (int)i : -1;
+            const MXBinding *found=mx_binding_for_control(&config,[control[@"cid"] unsignedShortValue],slot);
+            if(found) binding=*found;
+        }
+        [self.modes[i] selectItemAtIndex:binding.action];
+        self.recorders[i].keyCode=binding.key; self.recorders[i].shortcutModifiers=binding.modifiers;
         [self.recorders[i] updateTitle]; [self modeChanged:self.modes[i]];
     }
     [self.wheelMode selectItemAtIndex:config.wheel_mode];
     self.smartShiftThreshold = config.smartshift;
+    [self.dpi removeAllItems];
+    [self.dpi addItemsWithTitles:@[@"Leave unchanged", @"400 DPI", @"800 DPI", @"1000 DPI", @"1600 DPI", @"2000 DPI", @"3200 DPI", @"4000 DPI"]];
     NSArray *dpis = @[@0, @400, @800, @1000, @1600, @2000, @3200, @4000];
     NSUInteger index = [dpis indexOfObject:@(config.dpi)];
     if (index == NSNotFound) {
@@ -490,27 +683,40 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
     if (sender) [self settingsChanged:sender];
 }
 - (BOOL)save {
+    if(!self.selectedDeviceID.length) return NO;
     for (MXRecorder *recorder in self.recorders) if (recorder.recording) {
         [self alert:@"Finish recording the shortcut first, or press Escape to cancel."]; return NO;
     }
     NSMutableDictionary *root = [readDictionary(supportPath(@"settings.plist")) mutableCopy];
-    NSMutableDictionary *buttons = [root[@"buttons"] isKindOfClass:NSDictionary.class] ? [root[@"buttons"] mutableCopy] : [NSMutableDictionary new];
-    for (NSUInteger i = 0; i < MX_BUTTON_COUNT; ++i) {
-        if(self.compactMouse && i==4) continue;
-        buttons[@(mx_button_keys[i])] = @{@"mode":@(self.modes[i].indexOfSelectedItem),
-            @"keyCode":@(self.recorders[i].keyCode), @"modifiers":@(self.recorders[i].shortcutModifiers)};
+    NSMutableDictionary *profiles=[root[@"devices"] isKindOfClass:NSDictionary.class] ? [root[@"devices"] mutableCopy] : [NSMutableDictionary new];
+    NSDictionary *existing=self.selectedDeviceID ? profiles[self.selectedDeviceID] : root;
+    NSMutableDictionary *profile=[root mutableCopy];
+    [profile removeObjectForKey:@"devices"];
+    if([existing isKindOfClass:NSDictionary.class]) [profile addEntriesFromDictionary:existing];
+    NSMutableDictionary *buttons = [profile[@"buttons"] isKindOfClass:NSDictionary.class] ? [profile[@"buttons"] mutableCopy] : [NSMutableDictionary new];
+    // Save the selected mouse's actual effective bindings; unrelated global CIDs stay global.
+    NSMutableDictionary *controls=[existing[@"controls"] isKindOfClass:NSDictionary.class] ? [existing[@"controls"] mutableCopy] : [NSMutableDictionary new];
+    for(NSDictionary *control in self.availableControls) {
+        NSUInteger i=[control[@"slot"] unsignedIntegerValue];
+        if(i>=self.modes.count) continue;
+        NSDictionary *binding=@{@"mode":@(self.modes[i].indexOfSelectedItem),@"keyCode":@(self.recorders[i].keyCode),@"modifiers":@(self.recorders[i].shortcutModifiers)};
+        if(i<MX_BUTTON_COUNT) buttons[@(mx_button_keys[i])]=binding;
+        controls[[NSString stringWithFormat:@"%04x",[control[@"cid"] unsignedShortValue]]]=binding;
     }
-    root[@"buttons"] = buttons;
-    if(!self.compactMouse) {
-        root[@"wheelMode"] = @(self.wheelMode.indexOfSelectedItem);
-        root[@"smartShift"] = @(self.smartShiftThreshold);
-        root[@"dpi"] = self.dpi.indexOfSelectedItem == 0 ? @0 : @(self.dpi.titleOfSelectedItem.intValue);
+    profile[@"controls"]=controls;
+    profile[@"buttons"] = buttons;
+    if([self hasCapability:@"wheelMode"]) {
+        profile[@"wheelMode"] = @(self.wheelMode.indexOfSelectedItem);
+        profile[@"smartShift"] = @(self.smartShiftThreshold);
     }
-    root[@"verticalSpeed"] = @(self.verticalSpeed.integerValue);
-    if(!self.compactMouse) root[@"horizontalSpeed"] = @(self.horizontalSpeed.integerValue);
-    root[@"invertVertical"] = self.invertVertical.state == NSControlStateValueOn ? @YES : @NO;
-    if(!self.compactMouse) root[@"invertHorizontal"] = self.invertHorizontal.state == NSControlStateValueOn ? @YES : @NO;
-    root[@"smooth"] = self.smooth.state == NSControlStateValueOn ? @YES : @NO;
+    if([self hasCapability:@"dpi"]) profile[@"dpi"] = self.dpi.indexOfSelectedItem == 0 ? @0 : @(self.dpi.titleOfSelectedItem.intValue);
+    if([self hasCapability:@"verticalScroll"]) profile[@"verticalSpeed"] = @(self.verticalSpeed.integerValue);
+    if([self hasCapability:@"horizontalScroll"]) profile[@"horizontalSpeed"] = @(self.horizontalSpeed.integerValue);
+    if([self hasCapability:@"verticalScroll"]) profile[@"invertVertical"] = self.invertVertical.state == NSControlStateValueOn ? @YES : @NO;
+    if([self hasCapability:@"horizontalScroll"]) profile[@"invertHorizontal"] = self.invertHorizontal.state == NSControlStateValueOn ? @YES : @NO;
+    if([self hasCapability:@"verticalScroll"]) profile[@"smooth"] = self.smooth.state == NSControlStateValueOn ? @YES : @NO;
+    if(self.selectedDeviceID) { profiles[self.selectedDeviceID]=profile; root[@"devices"]=profiles; }
+    else [root addEntriesFromDictionary:profile];
     NSString *path = supportPath(@"settings.plist");
     if (!path || !mx_write_plist(path.fileSystemRepresentation, (__bridge CFDictionaryRef)root)) {
         [self alert:@"Could not save settings. Check that your Application Support folder is writable."]; return NO;
@@ -683,21 +889,23 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
     BOOL optionsInstalled=[MXLogiControls installed];
     BOOL optionsRunning=[MXLogiControls running];
     self.quitOptionsButton.hidden=!optionsInstalled;
-    self.importOptionsButton.hidden=!optionsInstalled;
+    self.importOptionsButton.hidden=!optionsInstalled || ![self canImportOptions];
     self.quitOptionsButton.enabled=optionsRunning && !self.quittingOptions;
     self.quitOptionsButton.title=self.quittingOptions ? @"Quitting…" : @"Quit Options+";
     self.uninstallOptionsButton.hidden=!optionsInstalled;
     BOOL running = [self helperRunning];
     if (running) [self post:@"local.mxmouse.status"];
     NSDictionary *status = readDictionary(supportPath(@"status.plist"));
-    NSNumber *battery=[status[@"batteryPercent"] isKindOfClass:NSNumber.class] ? status[@"batteryPercent"] : nil;
-    NSString *batteryState=[status[@"batteryStatus"] isKindOfClass:NSString.class] ? status[@"batteryStatus"] : @"";
-    BOOL knownBattery=running && [status[@"connected"] boolValue] &&
+    NSDictionary *active=[self updateDevice:status];
+    self.importOptionsButton.hidden=!optionsInstalled || ![self canImportOptions];
+    NSNumber *battery=[active[@"batteryPercent"] isKindOfClass:NSNumber.class] ? active[@"batteryPercent"] : nil;
+    NSString *batteryState=[active[@"batteryStatus"] isKindOfClass:NSString.class] ? active[@"batteryStatus"] : @"";
+    BOOL knownBattery=running && [active[@"connected"] boolValue] &&
         ((battery && battery.integerValue>=0 && battery.integerValue<=100) || batteryState.length);
     self.batteryLabel.hidden=self.batteryIcon.hidden=!knownBattery;
     if (knownBattery) {
-        self.batteryLabel.stringValue=battery ? [NSString stringWithFormat:@"%ld%%%@",battery.integerValue,[status[@"batteryCharging"] boolValue] ? @" · Charging" : @""] : batteryState;
-        NSString *symbol=[status[@"batteryCharging"] boolValue] ? @"battery.100percent.bolt" :
+        self.batteryLabel.stringValue=battery ? [NSString stringWithFormat:@"%ld%%%@",battery.integerValue,[active[@"batteryCharging"] boolValue] ? @" · Charging" : @""] : batteryState;
+        NSString *symbol=[active[@"batteryCharging"] boolValue] ? @"battery.100percent.bolt" :
             !battery ? @"battery.50percent" : battery.integerValue<=10 ? @"battery.0percent" :
             battery.integerValue<=35 ? @"battery.25percent" : battery.integerValue<=65 ? @"battery.50percent" :
             battery.integerValue<=85 ? @"battery.75percent" : @"battery.100percent";
@@ -706,9 +914,8 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
         self.batteryLabel.toolTip=@"Battery level reported by the connected mouse.";
     }
 
-    [self updateDevice:status];
-    NSString *state = [status[@"state"] isKindOfClass:NSString.class] ? status[@"state"] : @"";
-    NSString *detail = [status[@"detail"] isKindOfClass:NSString.class] ? status[@"detail"] : @"";
+    NSString *state = [active[@"state"] isKindOfClass:NSString.class] ? active[@"state"] : @"";
+    NSString *detail = [active[@"detail"] isKindOfClass:NSString.class] ? active[@"detail"] : @"";
     NSString *failure=nil;
     CFAbsoluteTime elapsed=CFAbsoluteTimeGetCurrent()-self.transitionStartedAt;
     if(self.helperTransition==1) {
@@ -731,7 +938,7 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
         BOOL ready=[permissions[@"inputMonitoring"] boolValue] && [permissions[@"postEventAccess"] boolValue];
         self.statusLabel.stringValue=self.checkingPermissions ? @"Checking permissions…" : ready ? @"Mouse controls start automatically." : @"Permissions required.";
     }
-    self.statusLabel.hidden=!self.helperTransition && !failure.length && ![state isEqualToString:@"error"] && !mx_conflicting_process(conflict);
+    self.statusLabel.hidden=!self.helperTransition && !failure.length && ![state isEqualToString:@"error"] && ![state isEqualToString:@"waiting"] && [active[@"connected"] boolValue] && !mx_conflicting_process(conflict);
     [self updatePermissionLabels];
     /* Keep the visible status fresh while the user changes System Settings.
        This runs only with this Settings window open, never in the resident helper. */

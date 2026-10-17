@@ -13,6 +13,14 @@ void mx_defaults(MXConfig *config) {
     config->vertical_speed = config->horizontal_speed = 100;
 }
 
+const MXBinding *mx_binding_for_control(const MXConfig *config, uint16_t cid, int slot) {
+    static const MXBinding native = {MX_NATIVE, 0, 0};
+    if (!config || !cid) return &native;
+    for (size_t i = 0; i < config->extra_button_count && i < MX_EXTRA_BUTTON_COUNT; ++i)
+        if (config->extra_buttons[i].cid == cid) return &config->extra_buttons[i].binding;
+    return slot >= 0 && slot < MX_BUTTON_COUNT ? &config->buttons[slot] : &native;
+}
+
 bool mx_output_reports(const uint8_t *data, size_t length, size_t sizes[256]) {
     struct Globals { uint32_t page, id, bits, count; } globals = {0}, stack[16];
     size_t depth = 0;

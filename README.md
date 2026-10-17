@@ -1,12 +1,12 @@
 # MX Mouse
 
-A lightweight macOS alternative to Logitech Logi Options+ for MX Master 3 for Mac and Logitech M705.
+A lightweight native macOS alternative to Logitech Logi Options+ for compatible Logitech HID++ mice.
 
-|        |   MX Mouse | MX Mouse UI | Logi Options+ |
+|        |   MX Mouse | MX Mouse UI (earlier build) | Logi Options+ |
 |--------|-----------:|------------:|--------------:|
-| Memory | **4.3 MB** |     29.1 MB |       120+ MB |
+| Memory | **3.05–4.39 MiB** |     29.1 MiB |       120+ MB |
 
-Close the window. Only the 4.3 MB stays.
+Close the window to leave only the helper running. The helper range was measured with one M705 active; memory with two awake mice is still unverified. See [measurements and validation](docs/development.md#footprint).
 
 ![MX Mouse Settings](docs/images/settings.png)
 
@@ -14,12 +14,17 @@ Close the window. Only the 4.3 MB stays.
 
 | Mouse | Connection | Notes |
 | --- | --- | --- |
-| MX Master 3 for Mac | Bluetooth | Apple Silicon, macOS 13+. |
-| **Logitech M705 — new in v0.1.1** | **Logitech Unifying USB receiver** | Apple Silicon, macOS 13+. Tested: paired ID `101b`, receiver `c52b`, older thumb-button variant. Wheel tilt stays native; no DPI or SmartShift. Bolt and other receiver models unsupported. |
+| MX Master 3 for Mac | Bluetooth | Previous builds verified on hardware; the shared feature path is retained. Apple Silicon, macOS 13+. |
+| Logitech M705 variants | Logitech Unifying receiver | Controls come from the connected unit: a missing thumb button is never assumed. Discovery, configuration and battery reporting checked on `101b` with this implementation; newer `406d` needs physical testing. |
+| MX Master 3S / 4 and other compatible HID++ 2.0+ mice | Direct Bluetooth / USB, or registered receivers | Features and controls are discovered dynamically. MX Master 4's Haptic panel can have a separate button binding; haptic feedback and gestures are not implemented. These new model/transport combinations still need hardware verification. |
+
+[v0.2.0](https://github.com/ruibeard/logitech-options-plus-alternative/releases/tag/v0.2.0) manages multiple mice in one helper process, with separate settings and receiver-slot routing. Simultaneous operation is covered by automated tests and still needs physical testing with two awake mice. Bolt, Unifying and selected Nano/Lightspeed transports have discovery support; recognition does not guarantee every mouse feature is implemented. Unsupported controls stay native. [Protocol coverage and verification tiers](docs/development.md#capability-and-verification-tiers) distinguish implemented paths from hardware-tested support.
 
 ## Features
 
 - [x] Custom buttons and shortcuts
+- [x] Discover controls per mouse, including additional buttons
+- [x] Multiple mice with separate settings in one helper process
 - [x] Scroll, DPI, SmartShift
 - [x] Import from Options+ (read-only)
 - [x] Quit or uninstall Options+ from the app
