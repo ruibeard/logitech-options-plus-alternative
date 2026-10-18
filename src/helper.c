@@ -41,7 +41,6 @@ struct Mouse {
     const MXDeviceDefinition *definition;
     char id[192], name[128], state[32], detail[512];
     uint32_t product_id, unit_id;
-    uint8_t identity_feature;
     MXControl controls_info[MX_CONTROL_MAX];
     size_t control_count;
     uint16_t button_controls[MX_BUTTON_COUNT];
@@ -353,7 +352,9 @@ static void clear_scroll(void) {
     memset(app.fraction, 0, sizeof(app.fraction));
 }
 
-/* Pairing may change while the USB receiver itself remains connected. */
+/* Pairing may change while the USB receiver itself remains connected.
+   The receiver's pairing serial is the only identity of a receiver mouse, as in the scan:
+   some mice, such as the M705, report a zero serial through HID++ 0x0003. */
 static bool receiver_identity_matches(void) {
     if (!app.receiver) return true;
     if (app.address < 1 || app.address > 6) return false;
@@ -363,10 +364,14 @@ static bool receiver_identity_matches(void) {
         !mx_parse_receiver_pairing(app.transport->receiver_kind, app.address, app.response, app.response_length, &pairing) ||
         pairing.product_id != app.product_id) return false;
     if (!app.unit_id) return true;
-    if (!app.identity_feature || !call(app.identity_feature, 0, NULL, 0) || app.response_length < 9) return false;
-    uint32_t unit = (uint32_t)app.response[5] << 24 | (uint32_t)app.response[6] << 16 |
-        (uint32_t)app.response[7] << 8 | app.response[8];
-    return unit == app.unit_id;
+    if (app.transport->receiver_kind == MX_RECEIVER_BOLT) {
+        uint32_t unit = (uint32_t)pairing.unit_id[0] << 24 | (uint32_t)pairing.unit_id[1] << 16 |
+            (uint32_t)pairing.unit_id[2] << 8 | pairing.unit_id[3];
+        return unit == app.unit_id;
+    }
+    sub = 0x2f + app.address;
+    return exchange(0xff, 0x83, 0xb5, &sub, 1) &&
+        mx_receiver_serial(app.address, app.response, app.response_length) == app.unit_id;
 }
 
 static void read_battery(bool force) {
@@ -384,11 +389,11 @@ static void read_battery(bool force) {
             case 1: level = "Critical"; break;
             case 2: level = "Low"; break;
             case 4: level = "Good"; break;
-            case 8: level = "Full"; break;
+            case 8: level = "High (approx.)"; break;
         }
     } else if (percent > 0 && percent <= 100) {
         /* Coarse 0x1000 devices report thresholds, not a measured percentage. */
-        level = percent < 11 ? "Critical" : percent < 30 ? "Low" : percent < 81 ? "Good" : "Full";
+        level = percent < 11 ? "Critical" : percent < 30 ? "Low" : percent < 81 ? "Good" : "High (approx.)";
     }
     const char *state = level;
     int charging = -1;
@@ -405,7 +410,9 @@ static void read_battery(bool force) {
     int reported = app.battery_percent_supported && percent <= 100 &&
         (app.battery_unified || percent > 0) ? (int)percent : -1;
     app.battery_percent = reported; app.battery_status = state; app.battery_charging = charging;
-    if (runtime.probe) fprintf(stderr, "Battery: percent=%d status=%s\n", reported, state ? state : "unknown");
+    if (runtime.probe) fprintf(stderr, "Battery: protocol=%s raw=%u,%u,%u percentage_supported=%d percent=%d status=%s\n",
+        app.battery_unified ? "1004" : "1000", percent, app.response[5], code,
+        app.battery_percent_supported, reported, state ? state : "unknown");
 }
 
 static void discover_battery(void) {
@@ -595,8 +602,9 @@ static void initialise_device(void) {
         }
         if (offset) app.name[offset] = 0;
     }
-    app.identity_feature = feature(0x0003);
-    if (app.identity_feature && call(app.identity_feature, 0, NULL, 0) && app.response_length >= 9) {
+    /* Receiver mice keep the pairing serial from the scan. */
+    uint8_t identity_feature = app.receiver ? 0 : feature(0x0003);
+    if (identity_feature && call(identity_feature, 0, NULL, 0) && app.response_length >= 9) {
         uint32_t unit = (uint32_t)app.response[5] << 24 | (uint32_t)app.response[6] << 16 |
             (uint32_t)app.response[7] << 8 | app.response[8];
         if (unit) {
@@ -693,7 +701,7 @@ static Mouse *find_mouse(Transport *transport, uint8_t address) {
     return NULL;
 }
 
-static Mouse *add_mouse(Transport *transport, uint8_t address, uint32_t product) {
+static Mouse *add_mouse(Transport *transport, uint8_t address, uint32_t product, uint32_t unit) {
     Mouse *mouse = calloc(1, sizeof(*mouse));
     if (!mouse) return NULL;
     mouse->transport = transport; mouse->address = address;
@@ -702,6 +710,10 @@ static Mouse *add_mouse(Transport *transport, uint8_t address, uint32_t product)
     mouse->definition = mx_device_lookup(0x046d, product);
     snprintf(mouse->name, sizeof(mouse->name), "%s", mouse->definition ? mouse->definition->name : "Logitech HID++ mouse");
     snprintf(mouse->id, sizeof(mouse->id), "logitech-%04x-%s%08x-%u", product, transport->serial, transport->location_id, address);
+    if (unit) {
+        mouse->unit_id = unit;
+        snprintf(mouse->id, sizeof(mouse->id), "logitech-%04x-%08x", product, unit);
+    }
     mouse->battery_percent = mouse->battery_charging = -1;
     char error[256];
     if (!mx_load_device_config(&mouse->config, mouse->id, error, sizeof(error))) {
@@ -734,14 +746,25 @@ static void scan_receiver(Transport *transport) {
             continue;
         }
         bool paired = mx_parse_receiver_pairing(transport->receiver_kind, slot, query.response, query.response_length, &pairing);
+        uint32_t unit = 0;
+        if (paired && (pairing.kind == 2 || pairing.kind == 3)) {
+            if (transport->receiver_kind == MX_RECEIVER_BOLT) {
+                unit = (uint32_t)pairing.unit_id[0] << 24 | (uint32_t)pairing.unit_id[1] << 16 |
+                    (uint32_t)pairing.unit_id[2] << 8 | pairing.unit_id[3];
+            } else {
+                // Extended pairing info identifies a sleeping mouse without waking it.
+                uint8_t extended = 0x2f + slot;
+                if (exchange(0xff, 0x83, 0xb5, &extended, 1))
+                    unit = mx_receiver_serial(slot, query.response, query.response_length);
+            }
+        }
         Mouse *mouse = find_mouse(transport, slot);
-        if (mouse && (!paired || pairing.product_id != mouse->product_id || (transport->receiver_kind == MX_RECEIVER_BOLT && mouse->unit_id &&
-            ((uint32_t)pairing.unit_id[0] << 24 | (uint32_t)pairing.unit_id[1] << 16 | (uint32_t)pairing.unit_id[2] << 8 | pairing.unit_id[3]) != mouse->unit_id) || (pairing.kind != 2 && pairing.kind != 3))) {
+        if (mouse && (!paired || pairing.product_id != mouse->product_id || (unit && mouse->unit_id && unit != mouse->unit_id) || (pairing.kind != 2 && pairing.kind != 3))) {
             /* Pairing replacement: never clean up an unrelated device at the old address. */
             mouse->online = false; mouse->removed = true; schedule_work(); mouse = NULL;
         }
         if (!paired || (pairing.kind != 2 && pairing.kind != 3)) continue;
-        if (!mouse) mouse = add_mouse(transport, slot, pairing.product_id);
+        if (!mouse) mouse = add_mouse(transport, slot, pairing.product_id, unit);
         if (mouse && !mouse->connected) { mouse->initialisation_attempted = false; mouse->online = true; }
     }
     runtime.current = previous;
@@ -782,7 +805,7 @@ static void matched(void *context, IOReturn result, void *sender, IOHIDDeviceRef
     IOHIDDeviceRegisterInputReportCallback(device, transport->input, sizeof(transport->input), input_report, transport);
     IOHIDDeviceScheduleWithRunLoop(device, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
     if (transport->receiver_kind) transport->scan = true;
-    else add_mouse(transport, 0xff, (uint32_t)product);
+    else add_mouse(transport, 0xff, (uint32_t)product, 0);
     schedule_work();
 }
 

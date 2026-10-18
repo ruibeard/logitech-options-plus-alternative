@@ -6,6 +6,7 @@ import tempfile
 import unittest
 import sys
 import subprocess
+import plistlib
 from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
@@ -13,6 +14,19 @@ import build
 
 
 class InstallTests(unittest.TestCase):
+    def test_helper_is_hidden_agent_and_settings_is_regular_app(self):
+        with tempfile.TemporaryDirectory() as directory:
+            helper = pathlib.Path(directory) / 'Helper.app'
+            settings = pathlib.Path(directory) / 'Settings.app'
+            build.info(helper, 'local.mxmouse.helper', 'mxmouse-helper', True)
+            build.info(settings, 'local.mxmouse.settings', 'mxmouse-settings')
+            helper_info = plistlib.loads((helper / 'Contents/Info.plist').read_bytes())
+            settings_info = plistlib.loads((settings / 'Contents/Info.plist').read_bytes())
+            self.assertTrue(helper_info['LSUIElement'])
+            self.assertTrue(helper_info['LSBackgroundOnly'])
+            self.assertNotIn('LSUIElement', settings_info)
+            self.assertNotIn('LSBackgroundOnly', settings_info)
+
     def test_login_item_process_blocks_install(self):
         def process(arguments, **kwargs):
             return subprocess.CompletedProcess(arguments, 0 if arguments[-1] == "local.mxmouse.helper" else 1)

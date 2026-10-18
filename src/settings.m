@@ -129,6 +129,17 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
 }
 @end
 
+@interface MXControlTextCell : NSTextFieldCell
+@end
+@implementation MXControlTextCell
+- (void)drawInteriorWithFrame:(NSRect)frame inView:(NSView *)view {
+    CGFloat height=MIN(NSHeight(frame),[self cellSizeForBounds:frame].height);
+    frame.origin.y+=(NSHeight(frame)-height)/2;
+    frame.size.height=height;
+    [super drawInteriorWithFrame:frame inView:view];
+}
+@end
+
 @interface MXDeviceListView : NSView
 @end
 @implementation MXDeviceListView
@@ -144,6 +155,29 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
 @property NSImage *batteryImage;
 @end
 @implementation MXDeviceButton
+- (NSDictionary *)textAttributes:(BOOL)title {
+    NSMutableParagraphStyle *paragraph=[NSMutableParagraphStyle new];
+    paragraph.alignment=NSTextAlignmentLeft; paragraph.lineBreakMode=NSLineBreakByWordWrapping;
+    NSFontWeight weight=title ? NSFontWeightSemibold : NSFontWeightRegular;
+    return @{NSFontAttributeName:[NSFont systemFontOfSize:title ? 13 : 11 weight:weight],
+        NSForegroundColorAttributeName:title ? NSColor.labelColor : NSColor.secondaryLabelColor,
+        NSParagraphStyleAttributeName:paragraph};
+}
+- (CGFloat)heightOfText:(NSString *)text width:(CGFloat)width title:(BOOL)title {
+    return MAX(16,ceil([text boundingRectWithSize:NSMakeSize(MAX(1,width),CGFLOAT_MAX)
+        options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
+        attributes:[self textAttributes:title]].size.height));
+}
+- (NSString *)displayName {
+    if([self.title isEqualToString:@"Marathon Mouse/Performance Plus M705"]) return @"Marathon M705";
+    if([self.title isEqualToString:@"MX Master 3 for Mac"]) return @"MX Master 3\nfor Mac";
+    return self.title;
+}
+- (CGFloat)heightForWidth:(CGFloat)width {
+    CGFloat titleHeight=[self heightOfText:[self displayName] width:width-96 title:YES];
+    CGFloat batteryHeight=[self heightOfText:self.batteryText width:width-120 title:NO];
+    return MAX(124,32+titleHeight+10+22+batteryHeight);
+}
 - (BOOL)isFlipped { return YES; }
 - (void)drawRect:(NSRect)rect {
     (void)rect;
@@ -151,37 +185,35 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
         [[NSColor.labelColor colorWithAlphaComponent:self.highlighted ? 0.12 : 0.07] setFill];
         [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds,4,3) xRadius:9 yRadius:9] fill];
     }
+    CGFloat width=NSWidth(self.bounds), height=NSHeight(self.bounds);
     NSSize size=self.image.size;
-    CGFloat scale=size.width>0 && size.height>0 ? MIN(68/size.width,76/size.height) : 1;
-    NSRect picture=NSMakeRect((164-size.width*scale)/2,12+(76-size.height*scale)/2,size.width*scale,size.height*scale);
+    CGFloat scale=size.width>0 && size.height>0 ? MIN(64/size.width,96/size.height) : 1;
+    NSRect picture=NSMakeRect(12+(64-size.width*scale)/2,(height-size.height*scale)/2,size.width*scale,size.height*scale);
     [self.image drawInRect:picture fromRect:NSZeroRect
         operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
-    NSMutableParagraphStyle *paragraph=[NSMutableParagraphStyle new];
-    paragraph.alignment=NSTextAlignmentCenter; paragraph.lineBreakMode=NSLineBreakByTruncatingTail;
-    [self.title drawInRect:NSMakeRect(10,96,144,18) withAttributes:@{
-        NSFontAttributeName:[NSFont systemFontOfSize:12 weight:self.state==NSControlStateValueOn ? NSFontWeightSemibold : NSFontWeightMedium],
-        NSForegroundColorAttributeName:NSColor.labelColor,NSParagraphStyleAttributeName:paragraph}];
-    NSDictionary *caption=@{NSFontAttributeName:[NSFont systemFontOfSize:10],
-        NSForegroundColorAttributeName:NSColor.secondaryLabelColor,NSParagraphStyleAttributeName:paragraph};
-    NSImage *statusIcon=self.connectionImage;
-    NSColor *statusColor=self.connected ? NSColor.systemGreenColor : NSColor.secondaryLabelColor;
-    statusIcon=[statusIcon copy]; statusIcon.template=YES;
-    NSImage *tinted=[[NSImage alloc] initWithSize:NSMakeSize(16,16)];
-    [tinted lockFocus];
-    [statusIcon drawInRect:NSMakeRect(0,0,16,16)];
-    [statusColor setFill]; NSRectFillUsingOperation(NSMakeRect(0,0,16,16),NSCompositingOperationSourceIn);
+
+    CGFloat titleHeight=[self heightOfText:[self displayName] width:width-96 title:YES];
+    CGFloat batteryHeight=[self heightOfText:self.batteryText width:width-120 title:NO];
+    CGFloat titleY=(height-titleHeight-10-22-batteryHeight)/2;
+    [[self displayName] drawWithRect:NSMakeRect(84,titleY,width-96,titleHeight)
+        options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading attributes:[self textAttributes:YES]];
+    CGFloat statusY=titleY+titleHeight+10, batteryY=statusY+22;
+    NSImage *statusIcon=[self.connectionImage copy]; statusIcon.template=YES;
+    NSImage *tinted=[[NSImage alloc] initWithSize:NSMakeSize(18,18)];
+    [tinted lockFocus]; [statusIcon drawInRect:NSMakeRect(0,0,18,18)];
+    [(self.connected ? NSColor.systemGreenColor : NSColor.secondaryLabelColor) setFill];
+    NSRectFillUsingOperation(NSMakeRect(0,0,18,18),NSCompositingOperationSourceIn);
     [tinted unlockFocus];
-    CGFloat statusWidth=MIN(126,[self.connectionLabel sizeWithAttributes:caption].width);
-    CGFloat statusX=(164-statusWidth-16)/2;
-    NSRect iconRect=NSMakeRect(statusX,116,14,14);
-    [tinted drawInRect:iconRect fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
-    [self.connectionLabel drawInRect:NSMakeRect(statusX+16,116,statusWidth,15) withAttributes:caption];
-    CGFloat batteryWidth=MIN(124,[self.batteryText sizeWithAttributes:caption].width);
-    CGFloat batteryX=(164-batteryWidth-22)/2;
-    [self.batteryImage drawInRect:NSMakeRect(batteryX,134,18,10) fromRect:NSZeroRect
+    [tinted drawInRect:NSMakeRect(84,statusY,18,18) fromRect:NSZeroRect
         operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
-    [self.batteryText drawInRect:NSMakeRect(batteryX+22,132,batteryWidth,15) withAttributes:caption];
+    [(self.connected ? @"Connected" : @"Offline") drawWithRect:NSMakeRect(108,statusY+1,width-120,18)
+        options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading attributes:[self textAttributes:NO]];
+    [self.batteryImage drawInRect:NSMakeRect(82,batteryY+1,22,14) fromRect:NSZeroRect
+        operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
+    [self.batteryText drawWithRect:NSMakeRect(108,batteryY,width-120,batteryHeight)
+        options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading attributes:[self textAttributes:NO]];
 }
+
 @end
 
 // Positions from the installed M705 Options+ core_metadata.json; controls still
@@ -247,14 +279,13 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
 @property NSTextField *deviceSubtitle;
 @property MXMouseView *mouseView;
 @property MXDiagram *diagramLines;
-@property NSMutableArray<NSView *> *masterOnlyViews;
 @property BOOL compactMouse;
 @property BOOL genericMouse;
 @property NSScrollView *deviceSidebar;
+@property NSButton *showSavedDevices;
 @property NSMutableArray<MXDeviceButton *> *deviceButtons;
 @property NSImage *masterThumbnail;
 @property NSImage *compactThumbnail;
-@property NSPopUpButton *controlSelector;
 @property NSTableView *controlTable;
 @property NSScrollView *controlList;
 @property NSView *buttonEditor;
@@ -263,7 +294,7 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
 @property NSTextField *scrollSectionTitle;
 @property NSArray<NSTextField *> *scrollRowLabels;
 @property NSDictionary<NSString *,NSImage *> *connectionImages;
-@property NSTextField *genericHint;
+@property NSTextField *controlEmptyState;
 @property NSArray<NSDictionary *> *devices;
 @property NSDictionary *selectedDevice;
 @property NSString *selectedDeviceID;
@@ -348,19 +379,23 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
         backing:NSBackingStoreBuffered defer:NO];
     self.window.title = @"MX Mouse Settings";
     self.window.releasedWhenClosed = NO;
-    [self.window setContentSize:NSMakeSize(1050, 588)];
+    [self.window setContentSize:NSMakeSize(1110, 760)];
     NSView *canvas=self.window.contentView;
-    NSView *root=[[NSView alloc] initWithFrame:NSMakeRect(180,0,870,588)];
+    NSView *root=[[NSView alloc] initWithFrame:NSMakeRect(240,0,870,760)];
     [canvas addSubview:root];
-    NSTextField *devicesHeading=[self label:@"Your mice" size:13 weight:NSFontWeightSemibold];
-    devicesHeading.frame=NSMakeRect(20,534,144,22); [canvas addSubview:devicesHeading];
-    NSBox *sidebarDivider=[[NSBox alloc] initWithFrame:NSMakeRect(179,18,1,552)];
+    NSTextField *devicesHeading=[self label:@"Your devices" size:13 weight:NSFontWeightSemibold];
+    devicesHeading.frame=NSMakeRect(20,706,204,22); [canvas addSubview:devicesHeading];
+    NSBox *sidebarDivider=[[NSBox alloc] initWithFrame:NSMakeRect(239,18,1,724)];
     sidebarDivider.boxType=NSBoxSeparator; [canvas addSubview:sidebarDivider];
-    self.deviceSidebar=[[NSScrollView alloc] initWithFrame:NSMakeRect(8,18,164,498)];
+    self.deviceSidebar=[[NSScrollView alloc] initWithFrame:NSMakeRect(8,56,224,632)];
     self.deviceSidebar.drawsBackground=NO; self.deviceSidebar.hasVerticalScroller=YES;
     self.deviceSidebar.autohidesScrollers=YES;
     self.deviceSidebar.documentView=[[MXDeviceListView alloc] initWithFrame:self.deviceSidebar.bounds];
     [canvas addSubview:self.deviceSidebar];
+    self.showSavedDevices=[NSButton checkboxWithTitle:@"Show previous pairings" target:self action:@selector(savedDevicesChanged:)];
+    self.showSavedDevices.frame=NSMakeRect(20,20,204,24);
+    self.showSavedDevices.toolTip=@"Include saved models that are absent from the current device list. Older connections for a listed model stay hidden; their settings are preserved.";
+    [canvas addSubview:self.showSavedDevices];
     self.deviceButtons=[NSMutableArray new];
     self.masterThumbnail=[[NSImage alloc] initWithContentsOfFile:[NSBundle.mainBundle pathForResource:@"mx-master-3" ofType:@"png"]];
     self.compactThumbnail=[[NSImage alloc] initWithContentsOfFile:[NSBundle.mainBundle pathForResource:@"m705" ofType:@"png"]];
@@ -368,16 +403,15 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
         BOOL dark=[[appearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua,NSAppearanceNameDarkAqua]] isEqualToString:NSAppearanceNameDarkAqua];
         return [NSColor colorWithCalibratedWhite:dark ? 0.12 : 0.975 alpha:1];
     }];
-    self.masterOnlyViews=[NSMutableArray new];
     self.wheelViews=[NSMutableArray new]; self.horizontalViews=[NSMutableArray new]; self.verticalViews=[NSMutableArray new]; self.dpiViews=[NSMutableArray new];
     self.importOptionsButton=[self button:@"Import from Options+…" action:@selector(importOptions:)];
-    self.importOptionsButton.frame=NSMakeRect(30,625,200,28); [root addSubview:self.importOptionsButton];
+    self.importOptionsButton.frame=NSMakeRect(30,710,200,28); [root addSubview:self.importOptionsButton];
     self.quitOptionsButton=[self button:@"Quit Options+" action:@selector(quitOptions:)];
-    self.quitOptionsButton.frame=NSMakeRect(236,625,114,28); [root addSubview:self.quitOptionsButton];
+    self.quitOptionsButton.frame=NSMakeRect(236,710,114,28); [root addSubview:self.quitOptionsButton];
     self.quitOptionsButton.toolTip=@"Quit Options+ and stop its mouse agent for this login session.";
     self.uninstallOptionsButton=[self button:@"Uninstall Options+…" action:@selector(uninstallOptions:)];
-    self.uninstallOptionsButton.frame=NSMakeRect(354,625,166,28); [root addSubview:self.uninstallOptionsButton];
-    NSView *diagram = [[NSView alloc] initWithFrame:NSMakeRect(26, 168, 820, 440)]; [root addSubview:diagram];
+    self.uninstallOptionsButton.frame=NSMakeRect(30,10,166,28); [root addSubview:self.uninstallOptionsButton];
+    NSView *diagram = [[NSView alloc] initWithFrame:NSMakeRect(26, 224, 820, 440)]; [root addSubview:diagram];
     MXMouseView *mouse = [[MXMouseView alloc] initWithFrame:NSMakeRect(205, 10, 270, 430)]; [diagram addSubview:mouse]; self.mouseView=mouse;
     MXDiagram *arrows=[[MXDiagram alloc] initWithFrame:diagram.bounds]; [diagram addSubview:arrows]; self.diagramLines=arrows;
     self.callouts = [NSMutableArray new]; self.extraCallouts=[NSMutableArray new];
@@ -386,9 +420,6 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
     self.modes = [NSMutableArray new]; self.recorders = [NSMutableArray new]; self.buttonPanes = [NSMutableArray new];
     NSView *buttonEditor = [[NSView alloc] initWithFrame:NSMakeRect(12,12,240,120)];
     self.buttonEditor=buttonEditor;
-    self.controlSelector=[[NSPopUpButton alloc] initWithFrame:NSMakeRect(60,526,580,32) pullsDown:NO];
-    self.controlSelector.target=self; self.controlSelector.action=@selector(controlChanged:);
-    self.controlSelector.hidden=YES;
     self.controlList=[[NSScrollView alloc] initWithFrame:NSMakeRect(60,228,600,330)];
     self.controlList.drawsBackground=NO; self.controlList.hasVerticalScroller=YES;
     self.controlTable=[[NSTableView alloc] initWithFrame:self.controlList.bounds];
@@ -397,9 +428,15 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
     self.controlTable.intercellSpacing=NSMakeSize(10,0); self.controlTable.dataSource=self; self.controlTable.delegate=self;
     NSTableColumn *controlColumn=[[NSTableColumn alloc] initWithIdentifier:@"name"]; controlColumn.title=@"Control"; controlColumn.width=285; [self.controlTable addTableColumn:controlColumn];
     NSTableColumn *actionColumn=[[NSTableColumn alloc] initWithIdentifier:@"action"]; actionColumn.title=@"Action"; actionColumn.width=285; [self.controlTable addTableColumn:actionColumn];
+    for(NSTableColumn *column in self.controlTable.tableColumns) {
+        MXControlTextCell *cell=[[MXControlTextCell alloc] initTextCell:@""];
+        cell.font=[NSFont systemFontOfSize:13];
+        cell.lineBreakMode=NSLineBreakByTruncatingTail;
+        column.dataCell=cell;
+    }
     self.controlList.documentView=self.controlTable; self.controlList.hidden=YES; [root addSubview:self.controlList];
-    self.genericHint=[NSTextField wrappingLabelWithString:@"Select a control to customize its action. Controls are discovered from this mouse."];
-    self.genericHint.frame=NSMakeRect(64,176,590,40); self.genericHint.textColor=NSColor.secondaryLabelColor; self.genericHint.hidden=YES; [root addSubview:self.genericHint];
+    self.controlEmptyState=[NSTextField wrappingLabelWithString:@"No customizable controls reported yet. The mouse may be asleep or still connecting."];
+    self.controlEmptyState.frame=NSMakeRect(64,176,590,40); self.controlEmptyState.textColor=NSColor.secondaryLabelColor; self.controlEmptyState.hidden=YES; [root addSubview:self.controlEmptyState];
     self.selectionTitle = [self label:@"Thumb button" size:21 weight:NSFontWeightSemibold]; self.selectionTitle.frame = NSMakeRect(0,94,240,26); [buttonEditor addSubview:self.selectionTitle];
     __weak SettingsDelegate *layoutSelf = self;
     for (NSUInteger i=0; i<MX_BUTTON_COUNT; ++i) {
@@ -420,12 +457,12 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
         MXRecorder *recorder=[MXRecorder new]; recorder.frame=NSMakeRect(0,4,232,36);
         recorder.didChange=^{ [layoutSelf updateCallouts]; [layoutSelf settingsChanged:nil]; }; [pane addSubview:recorder]; [self.recorders addObject:recorder];
     }
-    MXCallout *thumbWheel=[[MXCallout alloc] initWithFrame:NSMakeRect(405,173,206,72)]; thumbWheel.title=@"Horizontal scroll\nThumb wheel"; thumbWheel.bordered=NO; thumbWheel.target=self; thumbWheel.action=@selector(showScroll:); [diagram addSubview:thumbWheel]; [self.callouts addObject:thumbWheel]; [self.masterOnlyViews addObject:thumbWheel]; [self.horizontalViews addObject:thumbWheel];
+    MXCallout *thumbWheel=[[MXCallout alloc] initWithFrame:NSMakeRect(405,173,206,72)]; thumbWheel.title=@"Horizontal scroll\nThumb wheel"; thumbWheel.bordered=NO; thumbWheel.target=self; thumbWheel.action=@selector(showScroll:); [diagram addSubview:thumbWheel]; [self.callouts addObject:thumbWheel]; [self.horizontalViews addObject:thumbWheel];
     /* Logitech core_metadata.json marker percentages, mapped into the image frame. */
     arrows.anchors=@[[NSValue valueWithPoint:NSMakePoint(396.1,375.5)], [NSValue valueWithPoint:NSMakePoint(326.65,182)], [NSValue valueWithPoint:NSMakePoint(299.14,255.1)], [NSValue valueWithPoint:NSMakePoint(227.84,190.6)], [NSValue valueWithPoint:NSMakePoint(422.39,293.8)], [NSValue valueWithPoint:NSMakePoint(353.36,218.55)]];
     arrows.ends=@[[NSValue valueWithPoint:NSMakePoint(438,376)], [NSValue valueWithPoint:NSMakePoint(338,141)], [NSValue valueWithPoint:NSMakePoint(256,264)], [NSValue valueWithPoint:NSMakePoint(205,190)], [NSValue valueWithPoint:NSMakePoint(458,294)], [NSValue valueWithPoint:NSMakePoint(411,209)]];
-    NSView *scrollEditor=[[NSView alloc] initWithFrame:NSMakeRect(555,5,250,162)];
-    self.scrollSection=scrollEditor; [diagram addSubview:scrollEditor];
+    NSView *scrollEditor=[[NSView alloc] initWithFrame:NSMakeRect(30,84,800,136)];
+    self.scrollSection=scrollEditor; [root addSubview:scrollEditor];
     NSTextField *scrollTitle=[self label:@"Point & Scroll" size:14 weight:NSFontWeightSemibold]; self.scrollSectionTitle=scrollTitle; scrollTitle.frame=NSMakeRect(0,260,240,26); [scrollEditor addSubview:scrollTitle];
     self.wheelMode=[[NSPopUpButton alloc] initWithFrame:NSMakeRect(0,208,235,28) pullsDown:NO]; [self.wheelMode addItemsWithTitles:@[@"Leave unchanged", @"Ratchet", @"Free spin", @"SmartShift"]]; [scrollEditor addSubview:self.wheelMode];
     NSArray *sectionNames=@[@"Wheel", @"Vertical", @"Horizontal", @"Pointer"];
@@ -443,8 +480,8 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
     self.horizontalSpeed=[NSSlider sliderWithValue:100 minValue:10 maxValue:300 target:self action:@selector(speedChanged:)]; self.horizontalSpeed.frame=NSMakeRect(0,88,177,22); [scrollEditor addSubview:self.horizontalSpeed];
     self.verticalValue=[self label:@"100%" size:10 weight:NSFontWeightRegular]; self.verticalValue.frame=NSMakeRect(184,157,54,22); [scrollEditor addSubview:self.verticalValue];
     self.horizontalValue=[self label:@"100%" size:10 weight:NSFontWeightRegular]; self.horizontalValue.frame=NSMakeRect(184,88,54,22); [scrollEditor addSubview:self.horizontalValue];
-    self.invertVertical=[NSButton checkboxWithTitle:@"↕" target:nil action:nil]; self.invertVertical.frame=NSMakeRect(0,135,104,22); [scrollEditor addSubview:self.invertVertical];
-    self.invertHorizontal=[NSButton checkboxWithTitle:@"↔" target:nil action:nil]; self.invertHorizontal.frame=NSMakeRect(0,66,235,22); [scrollEditor addSubview:self.invertHorizontal];
+    self.invertVertical=[NSButton checkboxWithTitle:@"Reverse" target:nil action:nil]; self.invertVertical.frame=NSMakeRect(0,135,104,22); [scrollEditor addSubview:self.invertVertical];
+    self.invertHorizontal=[NSButton checkboxWithTitle:@"Reverse" target:nil action:nil]; self.invertHorizontal.frame=NSMakeRect(0,66,235,22); [scrollEditor addSubview:self.invertHorizontal];
     self.smooth=[NSButton checkboxWithTitle:@"Smooth scrolling" target:nil action:nil]; self.smooth.frame=NSMakeRect(110,135,130,22); [scrollEditor addSubview:self.smooth];
     self.dpi=[[NSPopUpButton alloc] initWithFrame:NSMakeRect(0,10,235,28) pullsDown:NO]; [self.dpi addItemsWithTitles:@[@"Leave unchanged", @"400 DPI", @"800 DPI", @"1000 DPI", @"1600 DPI", @"2000 DPI", @"3200 DPI", @"4000 DPI"]]; [scrollEditor addSubview:self.dpi];
     self.invertVertical.toolTip=@"Reverse vertical scroll direction";
@@ -452,14 +489,14 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
     self.invertHorizontal.toolTip=@"Reverse horizontal scroll direction";
     self.invertHorizontal.accessibilityLabel=@"Reverse horizontal scroll direction";
     self.smooth.font=[NSFont systemFontOfSize:11];
-    [self.masterOnlyViews addObjectsFromArray:@[self.wheelMode,self.horizontalSpeed,self.horizontalValue,self.invertHorizontal,self.dpi]];
+    self.invertVertical.font=self.smooth.font; self.invertHorizontal.font=self.smooth.font;
     [self.wheelViews addObject:self.wheelMode]; [self.dpiViews addObject:self.dpi];
     [self.horizontalViews addObjectsFromArray:@[self.horizontalSpeed,self.horizontalValue,self.invertHorizontal]];
     [self.verticalViews addObjectsFromArray:@[self.verticalSpeed,self.verticalValue,self.invertVertical,self.smooth]];
-    NSBox *footerLine=[[NSBox alloc] initWithFrame:NSMakeRect(32,155,796,1)]; footerLine.boxType=NSBoxSeparator; [root addSubview:footerLine];
-    self.statusLabel=[NSTextField wrappingLabelWithString:@"Helper stopped."]; self.statusLabel.font=[NSFont systemFontOfSize:12]; self.statusLabel.frame=NSMakeRect(34,38,690,26); [root addSubview:self.statusLabel];
+    NSBox *footerLine=[[NSBox alloc] initWithFrame:NSMakeRect(30,72,800,1)]; footerLine.boxType=NSBoxSeparator; [root addSubview:footerLine];
+    self.statusLabel=[NSTextField wrappingLabelWithString:@"Helper stopped."]; self.statusLabel.font=[NSFont systemFontOfSize:12]; self.statusLabel.frame=NSMakeRect(160,38,670,26); [root addSubview:self.statusLabel];
     self.loginService=[SMAppService loginItemServiceWithIdentifier:@"local.mxmouse.helper"];
-    NSButton *login=[NSButton checkboxWithTitle:@"Start at login" target:self action:@selector(loginChanged:)]; login.font=[NSFont systemFontOfSize:12]; login.state=self.loginService.status==SMAppServiceStatusEnabled; login.frame=NSMakeRect(34,10,160,24); [root addSubview:login];
+    NSButton *login=[NSButton checkboxWithTitle:@"Start at login" target:self action:@selector(loginChanged:)]; login.font=[NSFont systemFontOfSize:12]; login.state=self.loginService.status==SMAppServiceStatusEnabled; login.frame=NSMakeRect(716,10,114,24); [root addSubview:login];
     NSArray<NSString *> *permissionNames=@[@"Input Monitoring",@"Accessibility"];
     NSMutableArray *indicators=[NSMutableArray new];
     for(NSUInteger i=0;i<permissionNames.count;++i) {
@@ -467,19 +504,15 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
         NSImageView *indicator=[[NSImageView alloc] initWithFrame:NSMakeRect(0,5,14,14)];
         indicator.imageScaling=NSImageScaleProportionallyDown; [indicators addObject:indicator]; [group addSubview:indicator];
         NSTextField *name=[self label:permissionNames[i] size:12 weight:NSFontWeightRegular];
-        name.frame=NSMakeRect(20,0,140,24); [group addSubview:name]; [root addSubview:group];
+        name.frame=NSMakeRect(20,4,140,16); [group addSubview:name]; [root addSubview:group];
     }
     self.permissionIndicators=indicators;
     self.permissionsButton=[self button:@"Set Up…" action:@selector(permissions:)];
-    self.permissionsButton.frame=NSMakeRect(740,10,114,28); [root addSubview:self.permissionsButton];
+    self.permissionsButton.frame=NSMakeRect(34,38,114,28); [root addSubview:self.permissionsButton];
     self.shortcutPopover=[NSPopover new]; self.shortcutPopover.behavior=NSPopoverBehaviorTransient;
     NSViewController *shortcutController=[NSViewController new];
     shortcutController.view=[[NSView alloc] initWithFrame:NSMakeRect(0,0,264,144)];
     [shortcutController.view addSubview:buttonEditor]; self.shortcutPopover.contentViewController=shortcutController;
-    // Keep the main controls in place relative to the top as the footer shrinks.
-    for(NSView *view in root.subviews) if(view.frame.origin.y>=155) {
-        NSRect frame=view.frame; frame.origin.y-=88; view.frame=frame;
-    }
     self.selectedButton=3;
     for (NSControl *control in @[self.wheelMode, self.dpi, self.invertVertical, self.invertHorizontal, self.smooth]) {
         control.target=self; control.action=@selector(settingsChanged:);
@@ -557,11 +590,19 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
     if(slot==self.selectedButton) return;
     [self cancelRecording]; self.selectedButton=slot; [self updateCallouts];
 }
-- (void)controlChanged:(NSPopUpButton *)sender {
-    [self cancelRecording];
-    NSNumber *slot=sender.selectedItem.representedObject;
-    if(slot) self.selectedButton=slot.integerValue;
-    [self updateCallouts];
+- (void)savedDevicesChanged:(NSButton *)sender {
+    (void)sender;
+    [self.shortcutPopover close];
+    [self cancelRecording]; [self applyPendingSettings];
+    [self refresh:nil];
+}
+// History represents models absent from the current snapshot. It must not turn
+// earlier transport/receiver IDs for a listed model into extra device rows.
+- (NSString *)sidebarModelKey:(NSDictionary *)device {
+    NSString *name=[device[@"name"] isKindOfClass:NSString.class] ? device[@"name"] : @"";
+    if([name rangeOfString:@"M705" options:NSCaseInsensitiveSearch].location!=NSNotFound) return @"m705";
+    if([name rangeOfString:@"Master 3" options:NSCaseInsensitiveSearch].location!=NSNotFound) return @"master3";
+    return name.length ? name.lowercaseString : device[@"id"];
 }
 - (BOOL)hasCapability:(NSString *)name {
     return [self.capabilities[name] boolValue];
@@ -580,7 +621,7 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
         if(![item isKindOfClass:NSDictionary.class]) continue;
         NSDictionary *device=item;
         NSString *identity=[device[@"id"] isKindOfClass:NSString.class] ? device[@"id"] : nil;
-        if(!identity.length) continue;
+        if(!identity.length || [seen containsObject:identity]) continue;
         [seen addObject:identity];
         NSDictionary *previous=[known[identity] isKindOfClass:NSDictionary.class] ? known[identity] : nil;
         NSArray *controls=[device[@"controls"] isKindOfClass:NSArray.class] ? device[@"controls"] : @[];
@@ -625,6 +666,23 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
 }
 - (NSDictionary *)updateDevice:(NSDictionary *)status {
     NSArray *entries=[self rememberedDevices:status];
+    NSMutableSet *current=[NSMutableSet new], *representedModels=[NSMutableSet new];
+    NSArray *live=[status[@"devices"] isKindOfClass:NSArray.class] ? status[@"devices"] : @[];
+    for(id candidate in live) if([candidate isKindOfClass:NSDictionary.class] && [candidate[@"id"] isKindOfClass:NSString.class]) {
+        [current addObject:candidate[@"id"]];
+        [representedModels addObject:[self sidebarModelKey:candidate]];
+    }
+    NSMutableArray *visibleDevices=[NSMutableArray new];
+    for(NSDictionary *candidate in entries) {
+        BOOL currentDevice=[current containsObject:candidate[@"id"]];
+        BOOL selected=[candidate[@"id"] isEqual:self.selectedDeviceID];
+        NSString *model=[self sidebarModelKey:candidate];
+        if(currentDevice || selected || (self.showSavedDevices.state==NSControlStateValueOn && ![representedModels containsObject:model])) {
+            [visibleDevices addObject:candidate];
+            [representedModels addObject:model];
+        }
+    }
+    entries=visibleDevices;
     self.devices=entries;
     NSDictionary *device=nil;
     for(NSDictionary *candidate in entries) if([candidate[@"id"] isEqual:self.selectedDeviceID]) { device=candidate; break; }
@@ -637,8 +695,8 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
     while(self.deviceButtons.count>entries.count) {
         [self.deviceButtons.lastObject removeFromSuperview]; [self.deviceButtons removeLastObject];
     }
-    CGFloat height=MAX(self.deviceSidebar.contentSize.height,entries.count*158.0);
-    [self.deviceSidebar.documentView setFrameSize:NSMakeSize(164,height)];
+    CGFloat width=self.deviceSidebar.contentSize.width;
+    CGFloat nextY=0;
     for(NSUInteger i=0;i<entries.count;++i) {
         NSDictionary *candidate=entries[i];
         MXDeviceButton *button;
@@ -649,7 +707,7 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
             button.target=self; button.action=@selector(deviceChanged:);
             [self.deviceButtons addObject:button]; [self.deviceSidebar.documentView addSubview:button];
         }
-        button.frame=NSMakeRect(0,i*158,164,154); button.tag=(NSInteger)i;
+        button.tag=(NSInteger)i;
         button.title=[candidate[@"name"] isKindOfClass:NSString.class] ? candidate[@"name"] : @"Logitech mouse";
         button.connected=[candidate[@"connected"] boolValue];
         NSString *transport=[candidate[@"transport"] isKindOfClass:NSString.class] ? candidate[@"transport"] : @"";
@@ -676,7 +734,11 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
         NSString *batteryState=[candidate[@"batteryStatus"] isKindOfClass:NSString.class] ? candidate[@"batteryStatus"] : @"";
         button.batteryText=percentage ? [NSString stringWithFormat:@"%ld%%%@",battery.integerValue,charging ? @" · Charging" : @""] :
             button.connected && batteryState.length ? batteryState : @"Battery unavailable";
-        NSString *batterySymbol=charging ? @"battery.100percent.bolt" : !percentage ? @"battery.0percent" :
+        NSString *batterySymbol=charging ? @"battery.100percent.bolt" : !percentage ?
+            ([batteryState isEqualToString:@"High (approx.)"] ? @"battery.75percent" :
+             [batteryState isEqualToString:@"Good"] ? @"battery.50percent" :
+             [batteryState isEqualToString:@"Low"] ? @"battery.25percent" :
+             [batteryState isEqualToString:@"Full"] ? @"battery.100percent" : @"battery.0percent") :
             battery.integerValue<=10 ? @"battery.0percent" : battery.integerValue<=35 ? @"battery.25percent" :
             battery.integerValue<=65 ? @"battery.50percent" : battery.integerValue<=85 ? @"battery.75percent" : @"battery.100percent";
         NSColor *batteryColor=percentage && battery.integerValue<=10 ? NSColor.systemRedColor : NSColor.secondaryLabelColor;
@@ -688,9 +750,13 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
         button.state=candidate==device ? NSControlStateValueOn : NSControlStateValueOff;
         button.toolTip=!button.connected && receiver ? [NSString stringWithFormat:@"%@ — saved %@ receiver pairing. No active connection.",button.title,connection] :
             [NSString stringWithFormat:@"%@ — %@",button.title,button.connectionLabel];
+        button.toolTip=[button.toolTip stringByAppendingFormat:@" — %@",button.batteryText];
         [button setAccessibilityLabel:[NSString stringWithFormat:@"%@, %@, %@",button.title,button.connectionLabel,button.batteryText]];
+        CGFloat height=[button heightForWidth:width];
+        button.frame=NSMakeRect(0,nextY,width,height); nextY+=height+4;
         button.needsDisplay=YES;
     }
+    [self.deviceSidebar.documentView setFrameSize:NSMakeSize(width,MAX(self.deviceSidebar.contentSize.height,nextY))];
     NSDictionary *active=device ?: status;
     NSString *name=[active[@"name"] isKindOfClass:NSString.class] ? active[@"name"] : active[@"deviceName"];
     if(![name isKindOfClass:NSString.class] || !name.length) name=@"Logitech mouse";
@@ -718,25 +784,18 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
     }
     changed=changed || ![self.availableControls isEqualToArray:editable];
     self.availableControls=editable;
-    if(extraSlot>MX_BUTTON_COUNT) self.genericMouse=YES;
     BOOL mappedM705=compact;
-    for(NSDictionary *control in editable) {
-        NSPoint marker; NSRect frame;
-        if(!m705Layout([control[@"cid"] unsignedIntValue],&marker,&frame)) mappedM705=NO;
-    }
-    if(mappedM705) self.genericMouse=NO;
-    self.diagramLines.mappedControls=mappedM705 ? editable : nil;
-    // Extra controls need the list, but do not remove artwork for known models.
-    BOOL artworkWithList=self.genericMouse && (compact || master3);
-    self.mouseView.hidden=!(compact || master3);
-    self.diagramLines.hidden=self.genericMouse;
-    self.mouseView.frame=artworkWithList ? (compact ? NSMakeRect(0,70,280,300) : NSMakeRect(30,20,220,380)) :
-        (mappedM705 ? NSMakeRect(205,10,270,430) : compact ? NSMakeRect(155,50,400,350) : NSMakeRect(205,10,270,430));
-    self.controlList.frame=artworkWithList ? NSMakeRect(320,270,360,200) : NSMakeRect(60,270,600,200);
-    self.genericHint.frame=NSMakeRect(64,224,360,40);
+    self.diagramLines.mappedControls=compact ? editable : nil;
+    // Known mice keep their clickable labels; only unknown models need a table.
+    BOOL knownArtwork=compact || master3;
+    self.mouseView.hidden=!knownArtwork;
+    self.diagramLines.hidden=!knownArtwork;
+    self.mouseView.frame=NSMakeRect(205,10,270,430);
+    self.controlList.frame=NSMakeRect(60,244,740,430);
+    self.controlEmptyState.frame=NSMakeRect(72,590,716,48);
     if(self.controlTable.tableColumns.count==2) {
-        self.controlTable.tableColumns[0].width=artworkWithList ? 175 : 285;
-        self.controlTable.tableColumns[1].width=artworkWithList ? 155 : 285;
+        self.controlTable.tableColumns[0].width=360;
+        self.controlTable.tableColumns[1].width=350;
     }
     self.mouseView.compactMouse=compact; self.mouseView.needsDisplay=YES;
     self.diagramLines.compactMouse=compact;
@@ -745,7 +804,7 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
     for(NSUInteger i=0;i<MX_BUTTON_COUNT;++i) {
         if(i<self.callouts.count) self.callouts[i].frame=defaultFrames[i].rectValue;
         BOOL present=[self controlForSlot:i]!=nil;
-        self.callouts[i].hidden=self.genericMouse || !present;
+        self.callouts[i].hidden=!knownArtwork || compact || !present;
         if(present) [visible addIndex:i];
     }
     if([self hasCapability:@"horizontalScroll"]) [visible addIndex:5];
@@ -757,23 +816,27 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
             (slot-MX_BUTTON_COUNT<self.extraCallouts.count ? self.extraCallouts[slot-MX_BUTTON_COUNT] : nil);
         callout.frame=frame; callout.hidden=NO;
     }
+    // Controls without a grounded artwork position still have an inline editor,
+    // but no invented physical marker or connector.
+    NSInteger additionalRow=0;
+    if(knownArtwork) for(NSDictionary *control in editable) {
+        NSUInteger slot=[control[@"slot"] unsignedIntegerValue];
+        NSPoint marker; NSRect frame;
+        BOOL mapped=compact ? m705Layout([control[@"cid"] unsignedIntValue],&marker,&frame) : slot<MX_BUTTON_COUNT;
+        if(mapped) continue;
+        MXCallout *callout=slot<MX_BUTTON_COUNT ? self.callouts[slot] : self.extraCallouts[slot-MX_BUTTON_COUNT];
+        callout.frame=NSMakeRect(650,340-additionalRow*96,170,90);
+        callout.hidden=NO; ++additionalRow;
+    }
     self.diagramLines.visibleControls=visible; self.diagramLines.needsDisplay=YES;
     for(NSView *view in self.wheelViews) view.hidden=![self hasCapability:@"wheelMode"];
     [self.wheelMode itemAtIndex:3].enabled=[self hasCapability:@"smartShift"];
     for(NSView *view in self.dpiViews) view.hidden=![self hasCapability:@"dpi"];
     for(NSView *view in self.horizontalViews) view.hidden=![self hasCapability:@"horizontalScroll"];
     for(NSView *view in self.verticalViews) view.hidden=![self hasCapability:@"verticalScroll"];
-    self.callouts[5].hidden=self.genericMouse || ![self hasCapability:@"horizontalScroll"];
-    [self.controlSelector removeAllItems];
-    for(NSDictionary *control in editable) {
-        NSString *controlName=[control[@"name"] isKindOfClass:NSString.class] ? control[@"name"] : [NSString stringWithFormat:@"Control %@",control[@"cid"]];
-        [self.controlSelector addItemWithTitle:controlName]; self.controlSelector.lastItem.representedObject=control[@"slot"];
-    }
-    self.controlSelector.hidden=YES;
+    self.callouts[5].hidden=!master3 || ![self hasCapability:@"horizontalScroll"];
     self.controlList.hidden=!self.genericMouse;
-    self.controlSelector.enabled=editable.count>0;
-    self.genericHint.hidden=!self.genericMouse;
-    self.genericHint.stringValue=editable.count ? @"Select a control to customize its action. Controls are discovered from this mouse." : @"No customizable controls reported yet. The mouse may be asleep or still connecting.";
+    self.controlEmptyState.hidden=!self.genericMouse || editable.count>0;
     if(![self controlForSlot:(NSUInteger)self.selectedButton]) self.selectedButton=editable.count ? [editable.firstObject[@"slot"] integerValue] : -1;
     if(changed) { [self cancelRecording]; [self load]; }
     [self updateCallouts];
@@ -821,7 +884,6 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
         if(self.controlTable.selectedRow!=(NSInteger)row) [self.controlTable selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO];
         break;
     }
-    for(NSMenuItem *item in self.controlSelector.itemArray) if([item.representedObject integerValue]==self.selectedButton) { [self.controlSelector selectItem:item]; break; }
 }
 - (void)cancelRecording {
     for (MXRecorder *recorder in self.recorders) if (recorder.recording) {
@@ -852,29 +914,30 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
         [self hasCapability:@"horizontalScroll"],[self hasCapability:@"dpi"]};
     NSUInteger count=0; for(NSUInteger i=0;i<4;++i) if(enabled[i]) ++count;
     self.scrollSection.hidden=count==0;
-    CGFloat height=28+count*28+(enabled[1] ? 22 : 0);
-    self.scrollSection.frame=NSMakeRect(555,5,250,height);
-    self.scrollSectionTitle.frame=NSMakeRect(0,height-22,250,20);
-    CGFloat y=height-48;
+    self.scrollSection.frame=NSMakeRect(30,84,800,136);
+    self.scrollSectionTitle.frame=NSMakeRect(0,112,800,20);
     const NSUInteger order[]={0,3,1,2};
+    NSUInteger leftRow=0, rightRow=0;
     for(NSUInteger j=0;j<4;++j) {
         NSUInteger i=order[j];
         self.scrollRowLabels[i].hidden=!enabled[i];
         if(!enabled[i]) continue;
-        self.scrollRowLabels[i].frame=NSMakeRect(0,y+3,62,18);
-        if(i==0) self.wheelMode.frame=NSMakeRect(64,y-1,186,26);
-        else if(i==3) self.dpi.frame=NSMakeRect(64,y-1,186,26);
+        BOOL scroll=i==1 || i==2;
+        CGFloat x=scroll ? 400 : 0;
+        CGFloat y=78-34*(scroll ? rightRow++ : leftRow++);
+        self.scrollRowLabels[i].frame=NSMakeRect(x,y+3,70,18);
+        if(i==0) self.wheelMode.frame=NSMakeRect(x+76,y-1,230,26);
+        else if(i==3) self.dpi.frame=NSMakeRect(x+76,y-1,230,26);
         else {
             NSSlider *slider=i==1 ? self.verticalSpeed : self.horizontalSpeed;
             NSTextField *value=i==1 ? self.verticalValue : self.horizontalValue;
             NSButton *reverse=i==1 ? self.invertVertical : self.invertHorizontal;
-            slider.frame=NSMakeRect(64,y+1,108,22);
-            value.frame=NSMakeRect(174,y+2,34,18);
-            reverse.frame=NSMakeRect(210,y,40,22);
+            slider.frame=NSMakeRect(x+76,y+1,168,22);
+            value.frame=NSMakeRect(x+252,y+3,42,18);
+            reverse.frame=NSMakeRect(x+302,y,80,22);
         }
-        y-=28;
     }
-    self.smooth.frame=NSMakeRect(64,0,186,22);
+    self.smooth.frame=NSMakeRect(476,10,240,22);
 }
 - (void)startHelperIfReady {
     if(self.autoStartAttempted || self.helperTransition || self.checkingPermissions || [self helperRunning]) return;
@@ -1205,7 +1268,7 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
     (void)sender;
     BOOL optionsInstalled=[MXLogiControls installed];
     BOOL optionsRunning=[MXLogiControls running];
-    self.quitOptionsButton.hidden=!optionsInstalled;
+    self.quitOptionsButton.hidden=!optionsRunning;
     self.importOptionsButton.hidden=!optionsInstalled || ![self canImportOptions];
     self.quitOptionsButton.enabled=optionsRunning && !self.quittingOptions;
     self.quitOptionsButton.title=self.quittingOptions ? @"Quitting…" : @"Quit Options+";

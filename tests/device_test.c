@@ -113,6 +113,14 @@ int main(void) {
     assert(mx_receiver_kind(0xc52b) == MX_RECEIVER_UNIFYING);
     assert(mx_receiver_kind(0x1c548) == MX_RECEIVER_NONE);
     assert(mx_receiver_kind(0xffff) == MX_RECEIVER_NONE);
+    uint8_t serial_reply[20] = {0x11,0xff,0x83,0xb5,0x30,0x0e,0x87,0xb8,0xb8};
+    assert(mx_receiver_serial(1,serial_reply,20) == 0x0e87b8b8);
+    assert(!mx_receiver_serial(2,serial_reply,20));
+    for(size_t length=0;length<20;length++) assert(!mx_receiver_serial(1,serial_reply,length));
+    for(size_t field=0;field<5;field++) {
+        uint8_t malformed[20]; memcpy(malformed,serial_reply,20); malformed[field]^=1;
+        assert(!mx_receiver_serial(1,malformed,20));
+    }
     MXReceiverPairing identity;
     assert(mx_parse_receiver_pairing(MX_RECEIVER_UNIFYING,1,pairing,20,&identity));
     assert(identity.product_id == 0x101b && identity.kind == 2);

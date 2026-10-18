@@ -23,12 +23,15 @@ static NSDictionary *device(NSString *identity, NSString *name, NSArray *control
 static SettingsTestDelegate *editor(void) {
     SettingsTestDelegate *ui=[SettingsTestDelegate new];
     ui.deviceSidebar=[[NSScrollView alloc] initWithFrame:NSMakeRect(0,0,164,650)];
+    ui.showSavedDevices=[NSButton checkboxWithTitle:@"Show previous pairings" target:nil action:nil];
     ui.deviceSidebar.documentView=[[NSView alloc] initWithFrame:ui.deviceSidebar.bounds];
     ui.mouseView=[[MXMouseView alloc] initWithFrame:NSZeroRect];
     ui.diagramLines=[[MXDiagram alloc] initWithFrame:NSZeroRect];
     ui.controlList=[[NSScrollView alloc] initWithFrame:NSZeroRect];
     ui.callouts=[NSMutableArray new]; ui.extraCallouts=[NSMutableArray new];
-    for(NSUInteger i=0;i<6;++i) [ui.callouts addObject:[MXCallout new]];
+    for(NSUInteger i=0;i<6;++i) {
+        MXCallout *callout=[MXCallout new]; callout.tag=(NSInteger)i; [ui.callouts addObject:callout];
+    }
     for(NSUInteger i=0;i<MX_EXTRA_BUTTON_COUNT;++i) {
         MXCallout *callout=[MXCallout new]; callout.tag=(NSInteger)(i+MX_BUTTON_COUNT); [ui.extraCallouts addObject:callout];
     }
@@ -134,6 +137,23 @@ int main(void) {
         assert(NSEqualRects(fresh.callouts[0].frame,NSMakeRect(432,340,177,72)));
         fresh.selectedDeviceID=@"mx4"; fresh.testStatus=@{@"devices":@[mx4]}; [fresh refresh:nil];
         assert(fresh.genericMouse && fresh.mouseView.hidden && !fresh.controlList.hidden);
+        // Known mice keep inline editors for extra controls without a side table.
+        NSMutableDictionary *extendedMaster=[master3 mutableCopy];
+        extendedMaster[@"controls"]=@[control(0x52,0,@"Middle"),control(0xc3,3,@"Gesture"),control(0xd7,-1,@"Additional control")];
+        fresh.selectedDeviceID=@"master3"; fresh.testStatus=@{@"devices":@[extendedMaster]}; [fresh refresh:nil];
+        assert(!fresh.genericMouse && !fresh.mouseView.hidden && !fresh.diagramLines.hidden);
+        assert(fresh.controlList.hidden && !fresh.extraCallouts[0].hidden);
+        assert(!fresh.callouts[0].hidden && !fresh.callouts[3].hidden);
+        assert(NSEqualRects(fresh.mouseView.frame,NSMakeRect(205,10,270,430)));
+        [fresh selectButton:fresh.extraCallouts[0]];
+        assert(fresh.selectedButton==MX_BUTTON_COUNT);
+        [fresh selectButton:fresh.callouts[3]];
+        assert(fresh.selectedButton==3);
+        NSMutableDictionary *offlineExtended=[extendedMaster mutableCopy]; offlineExtended[@"connected"]=@NO;
+        offlineExtended[@"controls"]=@[]; offlineExtended[@"capabilities"]=@{};
+        fresh.testStatus=@{@"devices":@[offlineExtended]}; [fresh refresh:nil];
+        assert(!fresh.diagramLines.hidden && !fresh.callouts[3].hidden);
+        assert(fresh.availableControls.count==3);
         // A fresh window after helper restart restores the layout with empty offline status.
         SettingsTestDelegate *reopened=editor(); reopened.selectedDeviceID=@"m705";
         NSMutableDictionary *sleeping=[tiltM705 mutableCopy]; sleeping[@"connected"]=@NO;
@@ -142,6 +162,15 @@ int main(void) {
         assert(reopened.availableControls.count==3 && reopened.diagramLines.mappedControls.count==3);
         assert([reopened hasCapability:@"verticalScroll"] && ![reopened.selectedDevice[@"connected"] boolValue]);
         assert(mx_load_device_config(&config,"m705",error,sizeof(error)) && config.vertical_speed==140);
+        // Offline shortcut edits survive restart and use the same profile on reconnect.
+        setShortcut(reopened,0x52,42); assert([reopened save]);
+        assert(mx_load_device_config(&config,"m705",error,sizeof(error)));
+        assert(mx_binding_for_control(&config,0x52,0)->key==42);
+        SettingsTestDelegate *offlineEditor=editor(); offlineEditor.selectedDeviceID=@"m705";
+        offlineEditor.testStatus=@{@"devices":@[sleeping]}; [offlineEditor refresh:nil];
+        assert(offlineEditor.recorders[0].keyCode==42);
+        offlineEditor.testStatus=@{@"devices":@[tiltM705]}; [offlineEditor refresh:nil];
+        assert(offlineEditor.recorders[0].keyCode==42);
         // New live discovery replaces cached controls, including removal of a thumb.
         reopened.testStatus=@{@"devices":@[m705]}; [reopened refresh:nil];
         assert(![reopened controlForSlot:5] && reopened.availableControls.count==3);
@@ -157,6 +186,36 @@ int main(void) {
         SettingsTestDelegate *allOffline=editor(); NSMutableDictionary *offlineM705=[m705 mutableCopy]; offlineM705[@"connected"]=@NO;
         allOffline.testStatus=@{@"devices":@[offlineMaster,offlineM705]}; [allOffline refresh:nil];
         assert([allOffline.selectedDeviceID isEqual:@"master3"]);
+        // Historical pairings stay cached but never inflate the current device list.
+        SettingsTestDelegate *sidebar=editor(); sidebar.testStatus=@{@"devices":@[m705,m705]};
+        [sidebar refresh:nil];
+        assert(sidebar.devices.count==1 && [sidebar.devices[0][@"id"] isEqual:@"m705"]);
+        [sidebar refresh:nil];
+        assert(sidebar.devices.count==1 && readDictionary(supportPath(@"known-devices.plist"))[@"mx4"]);
+        sidebar.testStatus=@{@"devices":@[offlineM705]}; [sidebar refresh:nil];
+        assert(sidebar.devices.count==1 && ![sidebar.selectedDevice[@"connected"] boolValue]);
+        assert(sidebar.availableControls.count==3);
+        NSDictionary *secondM705=device(@"second-m705",@"Logitech M705",m705[@"controls"]);
+        sidebar.testStatus=@{@"devices":@[m705,secondM705]}; [sidebar refresh:nil];
+        assert(sidebar.devices.count==2);
+        assert(readDictionary(supportPath(@"known-devices.plist"))[@"mx4"]);
+        // History must not repeat current models under their old connection IDs.
+        NSDictionary *oldM705=device(@"old-receiver-m705",@"M705",m705[@"controls"]);
+        NSDictionary *oldMaster=device(@"old-receiver-master",@"MX Master 3",master3[@"controls"]);
+        NSDictionary *oldBluetooth=device(@"old-bluetooth-master",@"MX Master 3 for Mac",master3[@"controls"]);
+        NSDictionary *cache=@{@"old-receiver-m705":oldM705,@"old-receiver-master":oldMaster,@"old-bluetooth-master":oldBluetooth};
+        assert(mx_write_plist(supportPath(@"known-devices.plist").fileSystemRepresentation,(__bridge CFDictionaryRef)cache));
+        sidebar.selectedDeviceID=nil; sidebar.selectedDevice=nil;
+        sidebar.testStatus=@{@"devices":@[m705,master3]};
+        sidebar.showSavedDevices.state=NSControlStateValueOn; [sidebar savedDevicesChanged:sidebar.showSavedDevices];
+        assert(sidebar.devices.count==2);
+        sidebar.testStatus=@{@"devices":@[m705,secondM705,master3]}; [sidebar refresh:nil];
+        assert(sidebar.devices.count==3); // Distinct current mice of the same model remain separate.
+        sidebar.testStatus=@{@"devices":@[m705]}; [sidebar refresh:nil];
+        assert(sidebar.devices.count==2); // One saved Master model, not three old connection profiles.
+        sidebar.showSavedDevices.state=NSControlStateValueOff; [sidebar savedDevicesChanged:sidebar.showSavedDevices];
+        assert(sidebar.devices.count==1);
+        assert(readDictionary(supportPath(@"known-devices.plist"))[@"old-bluetooth-master"]);
         [NSObject cancelPreviousPerformRequestsWithTarget:ui];
         [[NSFileManager defaultManager] removeItemAtPath:@(temporary) error:nil];
         puts("Settings profile, discovered control, switching, and import tests passed.");

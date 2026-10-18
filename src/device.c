@@ -87,6 +87,15 @@ bool mx_parse_receiver_pairing(MXReceiverKind kind, uint8_t slot,
     return true;
 }
 
+uint32_t mx_receiver_serial(uint8_t slot, const uint8_t *report, size_t length) {
+    if (!report || slot < 1 || slot > 6 || length != 20 ||
+        report[0] != 0x11 || report[1] != 0xff || report[2] != 0x83 ||
+        report[3] != 0xb5 || report[4] != 0x2f + slot) return 0;
+    uint32_t serial = (uint32_t)report[5] << 24 | (uint32_t)report[6] << 16 |
+        (uint32_t)report[7] << 8 | report[8];
+    return serial == UINT32_MAX ? 0 : serial;
+}
+
 int mx_control_slot(uint16_t cid) {
     switch (cid) {
         case 0x0052: return 0;

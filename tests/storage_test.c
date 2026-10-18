@@ -46,6 +46,18 @@ static void device_profiles(const char *path) {
     assert(mx_binding_for_control(&first, 0x01a0, -1)->key == 21);
     assert(mx_binding_for_control(&second, 0x01a0, -1)->action == MX_NATIVE);
     assert(mx_binding_for_control(&first, 0x00c3, 3)->action == MX_NATIVE);
+    /* A new unit ID of a saved model inherits that model's profile, never another model's. */
+    CFMutableDictionaryRef m705 = dictionary(), other = dictionary();
+    set_number(m705, CFSTR("verticalSpeed"), 200);
+    set_number(other, CFSTR("verticalSpeed"), 150);
+    CFDictionarySetValue(profiles, CFSTR("logitech-101b-00140000-1"), m705);
+    CFDictionarySetValue(profiles, CFSTR("logitech-406d-0e87b8b8"), other);
+    CFRelease(m705); CFRelease(other);
+    assert(mx_write_plist(path, root));
+    assert(mx_load_device_config(&first, "logitech-101b-fd214577", error, sizeof(error)) && first.vertical_speed == 200);
+    assert(mx_load_device_config(&first, "logitech-4082-4d86c824", error, sizeof(error)) && first.vertical_speed == 79);
+    CFDictionaryRemoveValue(profiles, CFSTR("logitech-101b-00140000-1"));
+    CFDictionaryRemoveValue(profiles, CFSTR("logitech-406d-0e87b8b8"));
     /* Adding saved devices must not hit the former single-profile 64 KiB cap. */
     char archived_data[70001]; memset(archived_data, 'x', sizeof(archived_data) - 1); archived_data[70000] = 0;
     CFStringRef archived = CFStringCreateWithCString(NULL, archived_data, kCFStringEncodingASCII);

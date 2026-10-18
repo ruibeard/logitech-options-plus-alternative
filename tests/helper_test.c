@@ -94,9 +94,9 @@ static void test_discovery_and_optional_features(void) {
 }
 
 static void test_same_model_replacement_does_not_restore_old_controls(void) {
-    Transport transport = {.online = true, .receiver_kind = MX_RECEIVER_UNIFYING};
-    Mouse mouse = {.transport = &transport, .online = true, .address = 1, .receiver = true,
-        .product_id = 0x406d, .unit_id = 0x11, .identity_feature = 2, .control_count = 1,
+    Transport transport = {.online = true, .mouse_usage = true};
+    Mouse mouse = {.transport = &transport, .online = true, .address = 0xff,
+        .product_id = 0x406d, .unit_id = 0x11, .control_count = 1,
         .controls = 9, .wheel = 8, .wheel_changed = true, .old_wheel_valid = true};
     mouse.controls_info[0] = (MXControl){.cid = 0x59, .slot = 3, .divertible = true};
     mouse.diverted[0] = true;
@@ -111,9 +111,50 @@ static void test_same_model_replacement_does_not_restore_old_controls(void) {
     replacement_identity = false; test_exchange = NULL; runtime.current = runtime.mice = NULL;
 }
 
+/* The M705 101b reports a zero serial through 0x0003; only the receiver knows its unit. */
+static bool mock_zero_serial(uint8_t address, uint8_t index, uint8_t tag,
+                             const uint8_t *parameters, size_t length) {
+    if (index == 0x83 && tag == 0xb5) {
+        memset(app.response, 0, sizeof(app.response)); app.response_length = 20;
+        app.response[0] = 0x11; app.response[1] = 0xff; app.response[2] = 0x83; app.response[3] = 0xb5;
+        app.response[4] = parameters[0];
+        if (parameters[0] == 0x20) { app.response[7] = 0x10; app.response[8] = 0x1b; app.response[11] = 2; }
+        else { app.response[5] = 0xfd; app.response[6] = 0x21; app.response[7] = 0x45; app.response[8] = 0x77; }
+        return true;
+    }
+    if (!index && (tag >> 4) == 0 && length == 3 && parameters[0] == 0 && parameters[1] == 3) {
+        memset(app.response, 0, sizeof(app.response)); app.response_length = 20; app.response[4] = 2;
+        return true;
+    }
+    if (index == 2 && (tag >> 4) == 0) {
+        memset(app.response, 0, sizeof(app.response)); app.response_length = 20; app.response[4] = 1;
+        return true;
+    }
+    return mock_exchange(address, index, tag, parameters, length);
+}
+
+static void test_receiver_mouse_without_feature_serial_connects(void) {
+    Transport transport = {.online = true, .receiver_kind = MX_RECEIVER_UNIFYING};
+    Mouse mouse = {.transport = &transport, .online = true, .address = 1, .receiver = true,
+        .product_id = 0x101b, .unit_id = 0xfd214577};
+    mx_defaults(&mouse.config);
+    runtime.current = runtime.mice = &mouse; test_exchange = mock_zero_serial;
+    initialise_device();
+    assert(mouse.connected && !strcmp(mouse.state, "running"));
+    assert(mouse.unit_id == 0xfd214577);
+    test_exchange = NULL; runtime.current = runtime.mice = NULL;
+}
+
 static unsigned pairing_generation;
 static bool mock_pairing(uint8_t address, uint8_t index, uint8_t tag, const uint8_t *parameters, size_t length) {
     assert(address == 0xff && index == 0x83 && tag == 0xb5 && length == 1);
+    if (parameters[0] >= 0x30 && parameters[0] <= 0x31) {
+        memset(app.response, 0, sizeof(app.response)); app.response_length = 20;
+        app.response[0]=0x11; app.response[1]=0xff; app.response[2]=0x83; app.response[3]=0xb5;
+        app.response[4]=parameters[0]; app.response[5]=0x0e; app.response[6]=0x87;
+        app.response[7]=0xb8; app.response[8]=(parameters[0]==0x30 ? 0xb8 : 0xb9);
+        return true;
+    }
     unsigned slot = parameters[0] - 0x1f;
     if (slot > 3) return false;
     memset(app.response, 0, sizeof(app.response)); app.response_length = 20;
@@ -130,6 +171,13 @@ static void test_all_receiver_slots(void) {
     scan_receiver(&transport);
     Mouse *first = find_mouse(&transport, 1), *second = find_mouse(&transport, 2);
     assert(first && first->product_id == 0x406d && second && second->product_id == 0xb123);
+    assert(!strcmp(first->id, "logitech-406d-0e87b8b8"));
+    assert(!strcmp(second->id, "logitech-b123-0e87b8b9"));
+    assert(!first->connected && first->unit_id == 0x0e87b8b8);
+    runtime.current=first;
+    assert(receiver_identity_matches());
+    first->unit_id++; assert(!receiver_identity_matches()); first->unit_id--;
+    runtime.current=NULL;
     assert(!find_mouse(&transport, 3)); /* Keyboard on the same receiver stays untouched. */
     assert(first != second && first->definition && strstr(first->name, "M705"));
     pairing_generation = 1; scan_receiver(&transport);
@@ -350,9 +398,37 @@ static void test_response_routing(void) {
     runtime.mice = runtime.current = NULL;
 }
 
+static uint8_t battery_reply[3];
+static bool battery_exchange(uint8_t address, uint8_t index, uint8_t tag,
+                             const uint8_t *parameters, size_t length) {
+    (void)address; (void)index; (void)tag; (void)parameters; (void)length;
+    memset(app.response,0,sizeof(app.response)); app.response_length=20;
+    memcpy(app.response+4,battery_reply,sizeof(battery_reply)); return true;
+}
+static void test_battery_levels(void) {
+    Mouse mouse={.connected=true,.battery=1}; runtime.current=&mouse;
+    test_exchange=battery_exchange;
+    battery_reply[0]=90; battery_reply[1]=50; battery_reply[2]=0;
+    read_battery(true);
+    assert(mouse.battery_percent==-1 && !strcmp(mouse.battery_status,"High (approx.)"));
+    mouse.battery_percent_supported=true; read_battery(true);
+    assert(mouse.battery_percent==90);
+    battery_reply[2]=3; read_battery(true);
+    assert(!strcmp(mouse.battery_status,"Full") && mouse.battery_charging==0);
+    mouse.battery_unified=true; mouse.battery_percent_supported=false;
+    battery_reply[0]=0; battery_reply[1]=8; battery_reply[2]=0; read_battery(true);
+    assert(mouse.battery_percent==-1 && !strcmp(mouse.battery_status,"High (approx.)"));
+    battery_reply[2]=1; read_battery(true);
+    assert(!strcmp(mouse.battery_status,"Charging") && mouse.battery_charging==1);
+    mouse.battery_percent_supported=true; battery_reply[2]=0; read_battery(true);
+    assert(mouse.battery_percent==0);
+    test_exchange=NULL; runtime.current=NULL;
+}
+
 int main(void) {
     runtime.lock_fd = -1;
-    test_reconnect(); test_discovery_and_optional_features(); test_same_model_replacement_does_not_restore_old_controls(); test_all_receiver_slots(); test_receiver_scan_retry_and_wake(); test_reviewed_inventory_retention(); test_offline_receiver_slot_errors(); test_response_routing();
+    test_battery_levels();
+    test_reconnect(); test_discovery_and_optional_features(); test_same_model_replacement_does_not_restore_old_controls(); test_receiver_mouse_without_feature_serial_connects(); test_all_receiver_slots(); test_receiver_scan_retry_and_wake(); test_reviewed_inventory_retention(); test_offline_receiver_slot_errors(); test_response_routing();
     fprintf(stderr, "Helper state: mouse=%zu transport=%zu bytes\n", sizeof(Mouse), sizeof(Transport));
     return 0;
 }

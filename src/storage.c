@@ -157,6 +157,33 @@ static bool apply_config(CFDictionaryRef dictionary, MXConfig *config) {
     return true;
 }
 
+/* A unit without its own profile inherits one saved for the same model ("logitech-<product>-"),
+   so a new receiver, a re-pairing or an ID format change keeps the user's settings.
+   The lowest key wins, so the choice is stable. */
+static CFTypeRef model_profile(CFDictionaryRef profiles, const char *device_id) {
+    const char *dash = strchr(device_id, '-');
+    dash = dash ? strchr(dash + 1, '-') : NULL;
+    if (!dash) return NULL;
+    size_t prefix = (size_t)(dash - device_id) + 1;
+    CFIndex count = CFDictionaryGetCount(profiles);
+    const void **keys = malloc(sizeof(*keys) * (size_t)(count ? count : 1));
+    const void **values = malloc(sizeof(*values) * (size_t)(count ? count : 1));
+    CFTypeRef found = NULL;
+    char best[192] = {0};
+    if (keys && values) {
+        CFDictionaryGetKeysAndValues(profiles, keys, values);
+        for (CFIndex i = 0; i < count; ++i) {
+            char text[192];
+            if (CFGetTypeID(keys[i]) != CFStringGetTypeID() ||
+                !CFStringGetCString(keys[i], text, sizeof(text), kCFStringEncodingUTF8) ||
+                strncmp(text, device_id, prefix) || (found && strcmp(text, best) >= 0)) continue;
+            found = values[i]; snprintf(best, sizeof(best), "%s", text);
+        }
+    }
+    free(keys); free(values);
+    return found;
+}
+
 bool mx_load_device_config(MXConfig *config, const char *device_id, char *error, size_t capacity) {
     mx_defaults(config);
     if (error && capacity) error[0] = 0;
@@ -173,6 +200,7 @@ bool mx_load_device_config(MXConfig *config, const char *device_id, char *error,
             CFStringRef key = CFStringCreateWithCString(NULL, device_id, kCFStringEncodingUTF8);
             CFTypeRef profile = key ? CFDictionaryGetValue(profiles, key) : NULL;
             if (key) CFRelease(key);
+            if (!profile) profile = model_profile(profiles, device_id);
             if (profile) success = CFGetTypeID(profile) == CFDictionaryGetTypeID() && apply_config(profile, config);
         }
     }

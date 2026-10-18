@@ -39,6 +39,8 @@ MXReceiverKind mx_receiver_kind(uint32_t product);
 bool mx_parse_receiver_pairing(MXReceiverKind kind, uint8_t slot,
                                const uint8_t *report, size_t length,
                                MXReceiverPairing *out);
+/* Stable Unifying serial, available from the receiver while the mouse sleeps. */
+uint32_t mx_receiver_serial(uint8_t slot, const uint8_t *report, size_t length);
 /* Payload begins at report byte 4. Requires the complete V4 control-info row. */
 bool mx_control_from_report(const uint8_t *payload, size_t length, MXControl *out);
 int mx_control_slot(uint16_t cid);

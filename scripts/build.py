@@ -69,11 +69,12 @@ def info(bundle, identifier, executable, background=False):
         "CFBundlePackageType": "APPL",
         "CFBundleIconFile": "MXMouseHelper" if background else "MXMouse",
         "CFBundleShortVersionString": "0.2.0",
-        "CFBundleVersion": "6",
+        "CFBundleVersion": "9",
         "LSMinimumSystemVersion": "13.0",
         "NSHighResolutionCapable": True,
     }
     if background:
+        value["LSUIElement"] = True
         value["LSBackgroundOnly"] = True
         value["NSInputMonitoringUsageDescription"] = "Read connected Logitech mouse buttons and wheels to apply each mouse's settings."
     (contents / "Info.plist").write_bytes(plistlib.dumps(value))
