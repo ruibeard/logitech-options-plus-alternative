@@ -50,7 +50,7 @@ def main():
     run("xcrun", "clang", "-fobjc-arc", "-fblocks", *FLAGS,
         "tests/settings_test.m", "src/mouse_view.m", "src/import_options.m",
         "src/logi_controls.m", "src/helper_drag_view.m", *objects,
-        "-framework", "AppKit", "-framework", "ServiceManagement",
+        "-framework", "AppKit", "-framework", "Carbon", "-framework", "ServiceManagement",
         *FRAMEWORKS, "-lsqlite3", "-o", binary)
     isolated_run(binary)
     run(sys.executable, ROOT / "tests/test_build.py")

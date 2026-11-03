@@ -1,4 +1,5 @@
 #import <AppKit/AppKit.h>
+#import <Carbon/Carbon.h>
 #import <ServiceManagement/ServiceManagement.h>
 #import "mouse_view.h"
 #import "import_options.h"
@@ -24,11 +25,56 @@ static NSDictionary *readDictionary(NSString *path) {
     return [object isKindOfClass:NSDictionary.class] ? object : @{};
 }
 
+/* The character the current input source prints for a key code, so the label
+   matches the keyboard in use (UK "§" vs US "`" share a position but not a code). */
+static NSString *layoutCharacter(unsigned short code) {
+    TISInputSourceRef source = TISCopyCurrentKeyboardLayoutInputSource();
+    if (!source) return nil;
+    NSString *result = nil;
+    CFDataRef data = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData);
+    if (data) {
+        UInt32 deadKeys = 0; UniChar characters[4]; UniCharCount length = 0;
+        OSStatus status = UCKeyTranslate((const UCKeyboardLayout *)CFDataGetBytePtr(data), code, kUCKeyActionDisplay, 0,
+            LMGetKbdType(), kUCKeyTranslateNoDeadKeysBit, &deadKeys, 4, &length, characters);
+        if (status == noErr && length > 0) result = [NSString stringWithCharacters:characters length:length].uppercaseString;
+    }
+    CFRelease(source);
+    if (result.length == 0) return nil;
+    unichar first = [result characterAtIndex:0];
+    if (first < 0x21 || first == 0x7f || [NSCharacterSet.whitespaceAndNewlineCharacterSet characterIsMember:first]) return nil;
+    return result;
+}
+
+/* UK (ISO) and US (ANSI) keyboards swap codes 10 and 50 for the key below Esc. */
+static BOOL layoutSensitiveKey(unsigned short code) { return code == 10 || code == 50; }
+
+static NSString *shortcutDetail(unsigned short code) {
+    return layoutSensitiveKey(code)
+        ? [NSString stringWithFormat:@"Key code %hu. UK and US keyboards swap this key. If the shortcut does not work, record it again.", code]
+        : [NSString stringWithFormat:@"Key code %hu", code];
+}
+
+static void postShortcut(unsigned short code, NSEventModifierFlags modifiers) {
+    CGEventSourceRef source = CGEventSourceCreate(kCGEventSourceStateHIDSystemState);
+    CGEventFlags flags = CGEventSourceFlagsState(kCGEventSourceStateHIDSystemState) | (CGEventFlags)modifiers;
+    CGEventRef down = CGEventCreateKeyboardEvent(source, code, true);
+    CGEventRef up = CGEventCreateKeyboardEvent(source, code, false);
+    if (down && up) {
+        CGEventSetFlags(down, flags); CGEventSetFlags(up, flags);
+        CGEventPost(kCGHIDEventTap, down); CGEventPost(kCGHIDEventTap, up);
+    }
+    if (down) CFRelease(down);
+    if (up) CFRelease(up);
+    if (source) CFRelease(source);
+}
+
 static NSString *keyName(unsigned short code) {
-    NSDictionary *special = @{@36:@"Return", @48:@"Tab", @49:@"Space", @50:@"`", @51:@"Delete", @53:@"Esc",
+    NSDictionary *special = @{@36:@"Return", @48:@"Tab", @49:@"Space", @51:@"Delete", @53:@"Esc",
         @123:@"←", @124:@"→", @125:@"↓", @126:@"↑", @103:@"F11"};
     if (special[@(code)]) return special[@(code)];
-    NSDictionary *keys = @{@0:@"A", @1:@"S", @2:@"D", @3:@"F", @4:@"H", @5:@"G", @6:@"Z", @7:@"X", @8:@"C", @9:@"V", @11:@"B",
+    NSString *typed = layoutCharacter(code);
+    if (typed) return typed;
+    NSDictionary *keys = @{@0:@"A", @1:@"S", @2:@"D", @3:@"F", @4:@"H", @5:@"G", @6:@"Z", @7:@"X", @8:@"C", @9:@"V", @10:@"§", @50:@"`", @11:@"B",
         @12:@"Q", @13:@"W", @14:@"E", @15:@"R", @16:@"Y", @17:@"T", @18:@"1", @19:@"2", @20:@"3", @21:@"4", @22:@"6", @23:@"5",
         @24:@"=", @25:@"9", @26:@"7", @27:@"−", @28:@"8", @29:@"0", @30:@"]", @31:@"O", @32:@"U", @33:@"[", @34:@"I", @35:@"P",
         @37:@"L", @38:@"J", @39:@"'", @40:@"K", @41:@";", @42:@"\\", @43:@",", @44:@"/", @45:@"N", @46:@"M", @47:@"."};
@@ -50,6 +96,9 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
 @property NSEventModifierFlags shortcutModifiers;
 @property BOOL recording;
 @property (copy) void (^didChange)(void);
+@property (weak) NSTextField *detail;
+@property (weak) NSButton *test;
+- (void)updateDetail;
 @end
 
 @implementation MXRecorder
@@ -65,10 +114,17 @@ static NSString *shortcutLabel(unsigned short code, NSEventModifierFlags flags) 
 - (BOOL)acceptsFirstResponder { return YES; }
 - (void)beginRecording:(id)sender {
     (void)sender;
-    self.recording = YES; self.title = @"Press shortcut…";
+    self.recording = YES; self.title = @"Press shortcut…"; [self updateDetail];
     [self.window makeFirstResponder:self];
 }
-- (void)updateTitle { self.title = shortcutLabel(self.keyCode, self.shortcutModifiers); }
+- (void)updateTitle { self.title = shortcutLabel(self.keyCode, self.shortcutModifiers); [self updateDetail]; }
+- (void)setEnabled:(BOOL)enabled { [super setEnabled:enabled]; [self updateDetail]; }
+- (void)updateDetail {
+    self.test.enabled = self.enabled && !self.recording;
+    if (!self.detail) return;
+    self.detail.stringValue = !self.enabled ? @"" : self.recording ? @"Press the shortcut on your keyboard. Esc cancels." : shortcutDetail(self.keyCode);
+    self.detail.textColor = self.enabled && !self.recording && layoutSensitiveKey(self.keyCode) ? NSColor.systemOrangeColor : NSColor.secondaryLabelColor;
+}
 - (BOOL)capture:(NSEvent *)event {
     if (!self.recording) return NO;
     if (event.keyCode != 53) {
@@ -357,6 +413,27 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
     button.bezelStyle = NSBezelStyleRounded;
     return button;
 }
+- (void)addShortcutTools:(MXRecorder *)recorder pane:(NSView *)pane slot:(NSUInteger)slot {
+    NSButton *test=[self button:@"Test" action:@selector(testShortcut:)]; test.frame=NSMakeRect(168,66,66,28); test.tag=(NSInteger)slot;
+    test.toolTip=@"Sends this shortcut in 2 seconds. Switch to the target app to test it there.";
+    NSTextField *detail=[NSTextField wrappingLabelWithString:@""]; detail.frame=NSMakeRect(2,0,234,58);
+    detail.font=[NSFont systemFontOfSize:11]; detail.textColor=NSColor.secondaryLabelColor;
+    [pane addSubview:test]; [pane addSubview:detail]; recorder.test=test; recorder.detail=detail; [recorder updateDetail];
+}
+- (void)testShortcut:(NSButton *)sender {
+    MXRecorder *recorder=self.recorders[(NSUInteger)sender.tag];
+    if(!CGPreflightPostEventAccess()) {
+        CGRequestPostEventAccess();
+        [self alert:@"To test shortcuts, allow MX Mouse Settings in System Settings → Privacy & Security → Accessibility. Then click Test again."];
+        return;
+    }
+    unsigned short code=recorder.keyCode; NSEventModifierFlags modifiers=recorder.shortcutModifiers;
+    sender.enabled=NO; sender.title=@"In 2 s…";
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(2*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+        postShortcut(code,modifiers);
+        sender.title=@"Test"; [recorder updateDetail];
+    });
+}
 - (NSTextField *)label:(NSString *)text size:(CGFloat)size weight:(NSFontWeight)weight {
     NSTextField *label = [NSTextField labelWithString:text];
     label.font = [NSFont systemFontOfSize:size weight:weight];
@@ -418,7 +495,7 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
     NSArray *names = @[@"Middle button", @"Back", @"Forward", @"Thumb button", @"Top button"];
     NSArray<NSValue *> *frames = @[[NSValue valueWithRect:NSMakeRect(432,340,177,72)], [NSValue valueWithRect:NSMakeRect(270,75,174,72)], [NSValue valueWithRect:NSMakeRect(94,235,176,72)], [NSValue valueWithRect:NSMakeRect(0,145,211,90)], [NSValue valueWithRect:NSMakeRect(452,250,185,90)]];
     self.modes = [NSMutableArray new]; self.recorders = [NSMutableArray new]; self.buttonPanes = [NSMutableArray new];
-    NSView *buttonEditor = [[NSView alloc] initWithFrame:NSMakeRect(12,12,240,120)];
+    NSView *buttonEditor = [[NSView alloc] initWithFrame:NSMakeRect(12,12,240,168)];
     self.buttonEditor=buttonEditor;
     self.controlList=[[NSScrollView alloc] initWithFrame:NSMakeRect(60,228,600,330)];
     self.controlList.drawsBackground=NO; self.controlList.hasVerticalScroller=YES;
@@ -437,25 +514,25 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
     self.controlList.documentView=self.controlTable; self.controlList.hidden=YES; [root addSubview:self.controlList];
     self.controlEmptyState=[NSTextField wrappingLabelWithString:@"No customizable controls reported yet. The mouse may be asleep or still connecting."];
     self.controlEmptyState.frame=NSMakeRect(64,176,590,40); self.controlEmptyState.textColor=NSColor.secondaryLabelColor; self.controlEmptyState.hidden=YES; [root addSubview:self.controlEmptyState];
-    self.selectionTitle = [self label:@"Thumb button" size:21 weight:NSFontWeightSemibold]; self.selectionTitle.frame = NSMakeRect(0,94,240,26); [buttonEditor addSubview:self.selectionTitle];
+    self.selectionTitle = [self label:@"Thumb button" size:21 weight:NSFontWeightSemibold]; self.selectionTitle.frame = NSMakeRect(0,142,240,26); [buttonEditor addSubview:self.selectionTitle];
     __weak SettingsDelegate *layoutSelf = self;
     for (NSUInteger i=0; i<MX_BUTTON_COUNT; ++i) {
         MXCallout *callout = [[MXCallout alloc] initWithFrame:frames[i].rectValue]; callout.bordered = NO; callout.tag = (NSInteger)i; callout.target = self; callout.action = @selector(selectButton:); callout.title = names[i]; [diagram addSubview:callout]; [self.callouts addObject:callout];
-        NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0,0,240,88)]; [buttonEditor addSubview:pane]; [self.buttonPanes addObject:pane];
-        NSPopUpButton *mode = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0,46,232,30) pullsDown:NO];
+        NSView *pane = [[NSView alloc] initWithFrame:NSMakeRect(0,0,240,136)]; [buttonEditor addSubview:pane]; [self.buttonPanes addObject:pane];
+        NSPopUpButton *mode = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0,104,232,30) pullsDown:NO];
         [mode addItemsWithTitles:@[@"Mouse default", @"Keyboard shortcut", @"Do nothing"]]; mode.tag=(NSInteger)i; mode.target=self; mode.action=@selector(modeChanged:); [pane addSubview:mode]; [self.modes addObject:mode];
-        MXRecorder *recorder=[MXRecorder new]; recorder.frame=NSMakeRect(0,4,232,36); recorder.didChange=^{ [layoutSelf updateCallouts]; [layoutSelf settingsChanged:nil]; }; [pane addSubview:recorder]; [self.recorders addObject:recorder];
+        MXRecorder *recorder=[MXRecorder new]; recorder.frame=NSMakeRect(0,62,164,36); recorder.didChange=^{ [layoutSelf updateCallouts]; [layoutSelf settingsChanged:nil]; }; [pane addSubview:recorder]; [self.recorders addObject:recorder]; [self addShortcutTools:recorder pane:pane slot:i];
     }
     // Additional HID++ controls share the same editor, without adding a fixed model layout.
     for(NSUInteger i=MX_BUTTON_COUNT;i<MX_BUTTON_COUNT+MX_EXTRA_BUTTON_COUNT;++i) {
         MXCallout *callout=[[MXCallout alloc] initWithFrame:NSZeroRect]; callout.bordered=NO;
         callout.tag=(NSInteger)i; callout.target=self; callout.action=@selector(selectButton:); callout.hidden=YES;
         [diagram addSubview:callout]; [self.extraCallouts addObject:callout];
-        NSView *pane=[[NSView alloc] initWithFrame:NSMakeRect(0,0,240,88)]; pane.hidden=YES; [buttonEditor addSubview:pane]; [self.buttonPanes addObject:pane];
-        NSPopUpButton *mode=[[NSPopUpButton alloc] initWithFrame:NSMakeRect(0,46,232,30) pullsDown:NO];
+        NSView *pane=[[NSView alloc] initWithFrame:NSMakeRect(0,0,240,136)]; pane.hidden=YES; [buttonEditor addSubview:pane]; [self.buttonPanes addObject:pane];
+        NSPopUpButton *mode=[[NSPopUpButton alloc] initWithFrame:NSMakeRect(0,104,232,30) pullsDown:NO];
         [mode addItemsWithTitles:@[@"Mouse default",@"Keyboard shortcut",@"Do nothing"]]; mode.tag=(NSInteger)i; mode.target=self; mode.action=@selector(modeChanged:); [pane addSubview:mode]; [self.modes addObject:mode];
-        MXRecorder *recorder=[MXRecorder new]; recorder.frame=NSMakeRect(0,4,232,36);
-        recorder.didChange=^{ [layoutSelf updateCallouts]; [layoutSelf settingsChanged:nil]; }; [pane addSubview:recorder]; [self.recorders addObject:recorder];
+        MXRecorder *recorder=[MXRecorder new]; recorder.frame=NSMakeRect(0,62,164,36);
+        recorder.didChange=^{ [layoutSelf updateCallouts]; [layoutSelf settingsChanged:nil]; }; [pane addSubview:recorder]; [self.recorders addObject:recorder]; [self addShortcutTools:recorder pane:pane slot:i];
     }
     MXCallout *thumbWheel=[[MXCallout alloc] initWithFrame:NSMakeRect(405,173,206,72)]; thumbWheel.title=@"Horizontal scroll\nThumb wheel"; thumbWheel.bordered=NO; thumbWheel.target=self; thumbWheel.action=@selector(showScroll:); [diagram addSubview:thumbWheel]; [self.callouts addObject:thumbWheel]; [self.horizontalViews addObject:thumbWheel];
     /* Logitech core_metadata.json marker percentages, mapped into the image frame. */
@@ -511,7 +588,7 @@ static BOOL m705Layout(unsigned cid, NSPoint *marker, NSRect *callout) {
     self.permissionsButton.frame=NSMakeRect(34,38,114,28); [root addSubview:self.permissionsButton];
     self.shortcutPopover=[NSPopover new]; self.shortcutPopover.behavior=NSPopoverBehaviorTransient;
     NSViewController *shortcutController=[NSViewController new];
-    shortcutController.view=[[NSView alloc] initWithFrame:NSMakeRect(0,0,264,144)];
+    shortcutController.view=[[NSView alloc] initWithFrame:NSMakeRect(0,0,264,192)];
     [shortcutController.view addSubview:buttonEditor]; self.shortcutPopover.contentViewController=shortcutController;
     self.selectedButton=3;
     for (NSControl *control in @[self.wheelMode, self.dpi, self.invertVertical, self.invertHorizontal, self.smooth]) {

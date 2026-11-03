@@ -68,8 +68,8 @@ def info(bundle, identifier, executable, background=False):
         "CFBundleExecutable": executable,
         "CFBundlePackageType": "APPL",
         "CFBundleIconFile": "MXMouseHelper" if background else "MXMouse",
-        "CFBundleShortVersionString": "0.2.0",
-        "CFBundleVersion": "9",
+        "CFBundleShortVersionString": "0.2.1",
+        "CFBundleVersion": "10",
         "LSMinimumSystemVersion": "13.0",
         "NSHighResolutionCapable": True,
     }
@@ -98,7 +98,7 @@ def main():
     run("xcrun", "clang", *flags, "-std=c11", ROOT / "src/helper.c", *common,
         "-Wl,-dead_strip", "-o", HELPER / "Contents/MacOS/mxmouse-helper")
     run("xcrun", "clang", *flags, "-fobjc-arc", ROOT / "src/settings.m", ROOT / "src/mouse_view.m", ROOT / "src/import_options.m", ROOT / "src/logi_controls.m", ROOT / "src/helper_drag_view.m", *common,
-        "-framework", "AppKit", "-framework", "ServiceManagement", "-lsqlite3", "-Wl,-dead_strip",
+        "-framework", "AppKit", "-framework", "Carbon", "-framework", "ServiceManagement", "-lsqlite3", "-Wl,-dead_strip",
         "-o", APP / "Contents/MacOS/mxmouse-settings")
     run("xcrun", "clang", *flags, "-fobjc-arc", ROOT / "scripts/icon.m",
         "-framework", "AppKit", "-o", BUILD / "make-icon")

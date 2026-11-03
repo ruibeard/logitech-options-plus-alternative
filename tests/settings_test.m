@@ -61,6 +61,18 @@ int main(void) {
     @autoreleasepool {
         char temporary[]="/tmp/mx-settings-test-XXXXXX"; assert(mkdtemp(temporary)); assert(!setenv("HOME",temporary,1));
         assert([[NSFileManager defaultManager] createDirectoryAtPath:[@(temporary) stringByAppendingPathComponent:@"Library/Application Support"] withIntermediateDirectories:YES attributes:nil error:nil]);
+        /* Layout-swapped keys show their code and a warning; no key is left as a bare "Key N" label. */
+        assert(layoutSensitiveKey(10) && layoutSensitiveKey(50) && !layoutSensitiveKey(8));
+        assert(![keyName(10) hasPrefix:@"Key "] && ![keyName(50) hasPrefix:@"Key "]);
+        assert([shortcutDetail(10) containsString:@"Key code 10."] && [shortcutDetail(10) containsString:@"UK and US"]);
+        assert([shortcutDetail(8) isEqualToString:@"Key code 8"]);
+        {
+            MXRecorder *recorder=[MXRecorder new]; NSTextField *detail=[NSTextField labelWithString:@""]; NSButton *test=[NSButton new];
+            recorder.detail=detail; recorder.test=test; recorder.keyCode=10; recorder.shortcutModifiers=NSEventModifierFlagControl;
+            recorder.enabled=YES; [recorder updateTitle];
+            assert([detail.stringValue containsString:@"Key code 10."] && test.enabled);
+            recorder.enabled=NO; assert(detail.stringValue.length==0 && !test.enabled);
+        }
         [NSApplication sharedApplication];
         NSDictionary *legacy=@{@"buttons":@{@"thumb":binding(21),@"back":binding(33)},@"verticalSpeed":@79,@"smooth":@YES,@"invertVertical":@YES,@"devices":@{@"mx4":@{@"dpi":@8000},@"m705":@{@"controls":@{@"00c3":binding(49)}},@"other":@{@"verticalSpeed":@123}}};
         assert(mx_write_plist(supportPath(@"settings.plist").fileSystemRepresentation,(__bridge CFDictionaryRef)legacy));
