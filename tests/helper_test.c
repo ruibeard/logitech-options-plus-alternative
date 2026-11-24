@@ -7,6 +7,8 @@ static bool test_post_access(void) { return true; }
 #define main mx_helper_main
 #include "../src/helper.c"
 #undef main
+static unsigned notifications;
+void mx_notify(const char *title, const char *body) { (void)title; (void)body; notifications++; }
 
 static unsigned diversions, restorations;
 static uint16_t discovered_cid = 0x0052;
@@ -425,9 +427,24 @@ static void test_battery_levels(void) {
     test_exchange=NULL; runtime.current=NULL;
 }
 
+static void test_battery_alert(void) {
+    Mouse mouse={.connected=true,.battery=1,.battery_unified=true,.battery_percent_supported=true};
+    runtime.current=&mouse; test_exchange=battery_exchange; notifications=0;
+    battery_reply[1]=4; battery_reply[2]=0;
+    battery_reply[0]=50; read_battery(true); assert(notifications==0);
+    battery_reply[0]=20; read_battery(true); assert(notifications==1);
+    battery_reply[0]=15; read_battery(true); assert(notifications==1);
+    battery_reply[0]=25; read_battery(true); assert(notifications==1);
+    battery_reply[0]=18; battery_reply[2]=1; read_battery(true); assert(notifications==1);
+    battery_reply[2]=0; read_battery(true); assert(notifications==2);
+    battery_reply[0]=40; read_battery(true);
+    battery_reply[0]=10; read_battery(true); assert(notifications==3);
+    test_exchange=NULL; runtime.current=NULL;
+}
+
 int main(void) {
     runtime.lock_fd = -1;
-    test_battery_levels();
+    test_battery_levels(); test_battery_alert();
     test_reconnect(); test_discovery_and_optional_features(); test_same_model_replacement_does_not_restore_old_controls(); test_receiver_mouse_without_feature_serial_connects(); test_all_receiver_slots(); test_receiver_scan_retry_and_wake(); test_reviewed_inventory_retention(); test_offline_receiver_slot_errors(); test_response_routing();
     fprintf(stderr, "Helper state: mouse=%zu transport=%zu bytes\n", sizeof(Mouse), sizeof(Transport));
     return 0;

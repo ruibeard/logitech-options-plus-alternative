@@ -95,7 +95,9 @@ def main():
     for name in ("core", "storage", "device"):
         run("xcrun", "clang", *flags, "-std=c11", "-c", ROOT / f"src/{name}.c", "-o", BUILD / f"{name}.o")
     common = [BUILD / "core.o", BUILD / "storage.o", BUILD / "device.o", "-framework", "CoreFoundation", "-framework", "CoreGraphics", "-framework", "ApplicationServices", "-framework", "IOKit"]
-    run("xcrun", "clang", *flags, "-std=c11", ROOT / "src/helper.c", *common,
+    run("xcrun", "clang", *flags, "-fobjc-arc", "-c", ROOT / "src/notify.m", "-o", BUILD / "notify.o")
+    run("xcrun", "clang", *flags, "-std=c11", ROOT / "src/helper.c", BUILD / "notify.o", *common,
+        "-framework", "Foundation", "-framework", "UserNotifications",
         "-Wl,-dead_strip", "-o", HELPER / "Contents/MacOS/mxmouse-helper")
     run("xcrun", "clang", *flags, "-fobjc-arc", ROOT / "src/settings.m", ROOT / "src/mouse_view.m", ROOT / "src/import_options.m", ROOT / "src/logi_controls.m", ROOT / "src/helper_drag_view.m", *common,
         "-framework", "AppKit", "-framework", "Carbon", "-framework", "ServiceManagement", "-lsqlite3", "-Wl,-dead_strip",

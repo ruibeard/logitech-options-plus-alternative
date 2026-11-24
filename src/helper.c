@@ -1,6 +1,7 @@
 #include "core.h"
 #include "device.h"
 #include "storage.h"
+#include "notify.h"
 #include <CoreGraphics/CoreGraphics.h>
 #include <IOKit/hid/IOHIDManager.h>
 #include <IOKit/hidsystem/IOHIDLib.h>
@@ -58,6 +59,7 @@ struct Mouse {
     bool battery_unified, battery_percent_supported;
     CFAbsoluteTime battery_checked_at;
     int battery_percent, battery_charging;
+    bool battery_warned;
     const char *battery_status;
     uint8_t old_wheel, old_thumb[2], multiplier;
     uint16_t thumb_native, thumb_diverted;
@@ -410,6 +412,13 @@ static void read_battery(bool force) {
     int reported = app.battery_percent_supported && percent <= 100 &&
         (app.battery_unified || percent > 0) ? (int)percent : -1;
     app.battery_percent = reported; app.battery_status = state; app.battery_charging = charging;
+    if (reported > 30 || charging > 0) app.battery_warned = false;
+    else if (reported >= 0 && reported <= 20 && !app.battery_warned && !runtime.probe) {
+        char body[192];
+        snprintf(body, sizeof(body), "%s has %d%% battery left. Charge it soon.", app.name[0] ? app.name : "Your mouse", reported);
+        mx_notify("Mouse battery low", body);
+        app.battery_warned = true;
+    }
     if (runtime.probe) fprintf(stderr, "Battery: protocol=%s raw=%u,%u,%u percentage_supported=%d percent=%d status=%s\n",
         app.battery_unified ? "1004" : "1000", percent, app.response[5], code,
         app.battery_percent_supported, reported, state ? state : "unknown");
@@ -943,6 +952,12 @@ static void notify(CFNotificationCenterRef center, void *observer, CFStringRef n
     schedule_work();
 }
 
+static void battery_tick(CFRunLoopTimerRef timer, void *context) {
+    (void)timer; (void)context;
+    runtime.battery_requested = true;
+    schedule_work();
+}
+
 static void finish_timer(CFRunLoopTimerRef timer, void *context) {
     (void)timer; (void)context;
     runtime.stop = true; schedule_work();
@@ -1069,7 +1084,11 @@ int main(int argc, char **argv) {
         status("error", "Cannot open the HID manager. Check Input Monitoring for MX Mouse Helper.");
         runtime.stop = true; schedule_work();
     }
-    CFRunLoopTimerRef timer = NULL;
+    CFRunLoopTimerRef timer = NULL, battery_timer = NULL;
+    if (!offline && !runtime.probe) {
+        battery_timer = CFRunLoopTimerCreate(NULL, CFAbsoluteTimeGetCurrent() + 1800, 1800, 0, 0, battery_tick, NULL);
+        CFRunLoopAddTimer(CFRunLoopGetMain(), battery_timer, kCFRunLoopDefaultMode);
+    }
     if (duration) {
         timer = CFRunLoopTimerCreate(NULL, CFAbsoluteTimeGetCurrent() + duration, 0, 0, 0, finish_timer, NULL);
         CFRunLoopAddTimer(CFRunLoopGetMain(), timer, kCFRunLoopDefaultMode);
@@ -1082,6 +1101,7 @@ int main(int argc, char **argv) {
     }
     CFRelease(runtime.manager);
     if (timer) { CFRunLoopTimerInvalidate(timer); CFRelease(timer); }
+    if (battery_timer) { CFRunLoopTimerInvalidate(battery_timer); CFRelease(battery_timer); }
     CFNotificationCenterRemoveEveryObserver(center, NULL);
     CFRunLoopRemoveSource(CFRunLoopGetMain(), runtime.work, kCFRunLoopDefaultMode); CFRelease(runtime.work);
     if (runtime.event_source) CFRelease(runtime.event_source);
